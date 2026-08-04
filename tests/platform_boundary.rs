@@ -172,11 +172,10 @@ fn dispatches_only_fixed_profiles_and_validates_returned_ids() {
         ));
     }
 
-    assert!(string_at(
-        &document,
-        "/execution_contract/returned_id_validation"
-    )
-    .contains("before constructing"));
+    assert!(
+        string_at(&document, "/execution_contract/returned_id_validation")
+            .contains("before constructing")
+    );
 }
 
 #[test]
@@ -185,10 +184,13 @@ fn reserves_capacity_before_tasks_and_fences_horizontal_webhook_execution() {
 
     assert!(string_at(&document, "/admission_and_scaling/capacity_rule")
         .contains("before API or webhook task creation"));
-    assert!(string_at(&document, "/admission_and_scaling/single_replica_rule")
-        .contains("one replica"));
-    assert!(string_at(&document, "/admission_and_scaling/horizontal_scaling_gate")
-        .contains("Fiducia-fenced"));
+    assert!(
+        string_at(&document, "/admission_and_scaling/single_replica_rule").contains("one replica")
+    );
+    assert!(
+        string_at(&document, "/admission_and_scaling/horizontal_scaling_gate")
+            .contains("Fiducia-fenced")
+    );
 
     for limit in [
         "workflow bytes",
