@@ -62,6 +62,7 @@ jobs:
           test -f "$source_dir/.github/workflows/gha-clone-server-meta.yml"
 
           rsync --archive --delete --exclude='.git/' "$source_dir/" ./
+          rm -f .github/workflows/sync-exact-k8s-source-once.yml
           test ! -e .github/workflows/sync-exact-k8s-source-once.yml
 
           drift="$(rsync --archive --delete --dry-run --itemize-changes --exclude='.git/' "$source_dir/" ./)"
