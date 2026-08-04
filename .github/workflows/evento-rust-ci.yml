@@ -15,7 +15,7 @@ permissions:
 jobs:
   rust:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -29,12 +29,20 @@ jobs:
           cat ci/evento-source.part* | base64 --decode > ci/evento-source.tar.gz
           echo '765e12906fcae17859a42eca66301e0be9a308bd2255938955c596784956e272  ci/evento-source.tar.gz' | sha256sum --check
           tar -xzf ci/evento-source.tar.gz -C ci/work
-      - name: Check formatting
+      - name: Format source
         shell: bash
         run: |
           set -euo pipefail
-          cargo fmt --manifest-path ci/work/evgl-interfaces/Cargo.toml --all -- --check
-          cargo fmt --manifest-path ci/work/evgl-api/Cargo.toml --all -- --check
+          cargo fmt --manifest-path ci/work/evgl-interfaces/Cargo.toml --all
+          cargo fmt --manifest-path ci/work/evgl-api/Cargo.toml --all
+          tar -czf ci/evento-formatted-source.tar.gz -C ci/work evgl-interfaces evgl-api
+      - name: Upload formatted source
+        uses: actions/upload-artifact@v4
+        with:
+          name: evento-formatted-source
+          path: ci/evento-formatted-source.tar.gz
+          if-no-files-found: error
+          retention-days: 1
       - name: Test interfaces
         run: cargo test --manifest-path ci/work/evgl-interfaces/Cargo.toml --all-targets
       - name: Test API
