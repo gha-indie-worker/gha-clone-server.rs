@@ -1,0 +1,100 @@
+name: Publish exact clone-server source once
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/sync-exact-k8s-source-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-exact-k8s-source-once
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.actor != 'github-actions[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'sync/k8s-cluster-e75a654b'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout the target publication branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: sync/k8s-cluster-e75a654b
+          fetch-depth: 0
+          persist-credentials: true
+          show-progress: false
+
+      - name: Replace the target tree with the exact reviewed source subtree
+        env:
+          SOURCE_SHA: e75a654bfd527500a3a2ef4ceb1836e78e14a7a6
+        run: |
+          set -euo pipefail
+          test "${#SOURCE_SHA}" -eq 40
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+          rm -rf /tmp/k8s-cluster-source
+          git clone \
+            --no-tags \
+            --filter=blob:none \
+            --sparse \
+            --single-branch \
+            --branch dev \
+            https://github.com/ORESoftware/k8s-cluster.git \
+            /tmp/k8s-cluster-source
+          git -C /tmp/k8s-cluster-source sparse-checkout set \
+            remote/deployments/gha-clone-server-rs
+          git -C /tmp/k8s-cluster-source fetch --depth=1 origin "$SOURCE_SHA"
+          git -C /tmp/k8s-cluster-source checkout --detach "$SOURCE_SHA"
+          test "$(git -C /tmp/k8s-cluster-source rev-parse HEAD)" = "$SOURCE_SHA"
+
+          source_dir=/tmp/k8s-cluster-source/remote/deployments/gha-clone-server-rs
+          test -f "$source_dir/Cargo.toml"
+          test -f "$source_dir/Cargo.lock"
+          test -f "$source_dir/SOURCE-PROVENANCE.md"
+          test -f "$source_dir/.github/workflows/ci.yml"
+          test -f "$source_dir/.github/workflows/gha-clone-server-meta.yml"
+
+          rsync --archive --delete --exclude='.git/' "$source_dir/" ./
+          test ! -e .github/workflows/sync-exact-k8s-source-once.yml
+
+          drift="$(rsync --archive --delete --dry-run --itemize-changes --exclude='.git/' "$source_dir/" ./)"
+          if [[ -n "$drift" ]]; then
+            printf 'target tree differs from the exact source subtree:\n%s\n' "$drift" >&2
+            exit 1
+          fi
+          grep -Fq 'repository: ORESoftware/k8s-cluster' SOURCE-PROVENANCE.md
+          grep -Fq 'standalone target: gha-indie-worker/gha-clone-server.rs' SOURCE-PROVENANCE.md
+          git diff --check
+
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+        with:
+          toolchain: '1.90.0'
+          components: rustfmt, clippy
+
+      - name: Validate the exact standalone crate before publication
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked --all-targets -- --nocapture
+
+      - name: Commit and push the exact source publication
+        env:
+          SOURCE_SHA: e75a654bfd527500a3a2ef4ceb1836e78e14a7a6
+        run: |
+          set -euo pipefail
+          git diff --check
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "sync: publish gha-clone-server from k8s-cluster@$SOURCE_SHA"
+          test -z "$(git status --porcelain)"
+          git push origin HEAD:sync/k8s-cluster-e75a654b
