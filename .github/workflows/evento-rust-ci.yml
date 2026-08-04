@@ -29,6 +29,7 @@ jobs:
           cat ci/evento-source.part* | base64 --decode > ci/evento-source.tar.gz
           echo '765e12906fcae17859a42eca66301e0be9a308bd2255938955c596784956e272  ci/evento-source.tar.gz' | sha256sum --check
           tar -xzf ci/evento-source.tar.gz -C ci/work
+          sed -i 's/features = \["form", "json", "rustls-tls"\]/features = ["json", "rustls-tls"]/' ci/work/evgl-api/Cargo.toml
       - name: Format source
         shell: bash
         run: |
