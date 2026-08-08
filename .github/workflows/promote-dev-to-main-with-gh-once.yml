@@ -67,33 +67,34 @@ jobs:
               --comment 'Superseded by a bot-authored promotion PR so the repository owner can provide the required independent write-access approval without weakening branch protection.'
           fi
 
+          cat > /tmp/promotion.md <<'EOF'
+          ## Promotion
+
+          Promote the validated `dev` integration branch to protected `main`.
+
+          This PR is intentionally authored by `github-actions[bot]` so the repository owner can provide the independently attributable write-access approval required by the protected branch. No protection or review rule is bypassed.
+
+          ## Included integration
+
+          - feature PR: #2
+          - validated feature head: `5d8f4c00ea359c495b4bc997b29ce22cfc9c9c4f`
+          - integration merge: `26cc273d1a6c2b25c51d42f4c767baba510aefe3`
+          - permanent `CI` on the integration merge: green
+          - Linear: DEN-1606
+
+          ## Safety boundary
+
+          The promotion preserves the bounded fixed-profile continuity model, fail-closed workflow exclusions, atomic admission, single-replica delivery limits, credential separation, dormant activation, and Fiducia-backed scaling gates. It does not claim full GitHub Actions parity.
+
+          Merge only after an independent write-access approval and exact-head protected checks pass.
+          EOF
+
           url="$(gh pr create \
             --repo "$GH_REPO" \
             --base main \
             --head dev \
             --title 'Promote validated bounded continuity contract to main' \
-            --body-file - <<'EOF'
-## Promotion
-
-Promote the validated `dev` integration branch to protected `main`.
-
-This PR is intentionally authored by `github-actions[bot]` so the repository owner can provide the independently attributable write-access approval required by the protected branch. No protection or review rule is bypassed.
-
-## Included integration
-
-- feature PR: #2
-- validated feature head: `5d8f4c00ea359c495b4bc997b29ce22cfc9c9c4f`
-- integration merge: `26cc273d1a6c2b25c51d42f4c767baba510aefe3`
-- permanent `CI` on the integration merge: green
-- Linear: DEN-1606
-
-## Safety boundary
-
-The promotion preserves the bounded fixed-profile continuity model, fail-closed workflow exclusions, atomic admission, single-replica delivery limits, credential separation, dormant activation, and Fiducia-backed scaling gates. It does not claim full GitHub Actions parity.
-
-Merge only after an independent write-access approval and exact-head protected checks pass.
-EOF
-          )"
+            --body-file /tmp/promotion.md)"
           number="$(gh pr view "$url" --repo "$GH_REPO" --json number --jq .number)"
           head_sha="$(git rev-parse HEAD)"
           printf 'url=%s\nnumber=%s\nhead_sha=%s\n' "$url" "$number" "$head_sha" >> "$GITHUB_OUTPUT"
