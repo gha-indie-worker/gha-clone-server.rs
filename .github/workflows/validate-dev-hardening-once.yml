@@ -1,3 +1,4 @@
+# rerun after permanent workflow syntax repair
 name: Validate standalone dev hardening once
 
 on:
