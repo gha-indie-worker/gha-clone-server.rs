@@ -1,0 +1,131 @@
+name: Validate standalone dev hardening once
+
+on:
+  push:
+    branches:
+      - agent/harden-standalone-ci-on-dev-20260808
+    paths:
+      - .github/workflows/validate-dev-hardening-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: validate-standalone-dev-hardening-once
+  cancel-in-progress: false
+
+jobs:
+  exact-head:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - name: Check out exact feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: agent/harden-standalone-ci-on-dev-20260808
+          fetch-depth: 0
+          persist-credentials: true
+          show-progress: false
+
+      - name: Validate permanent workflow syntax
+        uses: docker://rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: .github/workflows/ci.yml
+
+      - name: Install reviewed Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.97.0'
+          components: rustfmt, clippy
+
+      - name: Validate complete Rust surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo fmt --all -- --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all
+          cargo build --locked --release --all-features
+
+      - name: Build and inspect hardened images
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision="$(git rev-parse HEAD)"
+          created="$(git show -s --format=%cI HEAD)"
+          docker build \
+            --target clone-server \
+            --build-arg OCI_REVISION="$revision" \
+            --build-arg OCI_CREATED="$created" \
+            --build-arg OCI_SOURCE="https://github.com/${GITHUB_REPOSITORY}" \
+            --tag gha-clone-server:ci \
+            .
+          docker build \
+            --target executor-router \
+            --build-arg OCI_REVISION="$revision" \
+            --build-arg OCI_CREATED="$created" \
+            --build-arg OCI_SOURCE="https://github.com/${GITHUB_REPOSITORY}" \
+            --tag gha-executor-router:ci \
+            .
+          test "$(docker image inspect gha-clone-server:ci --format '{{.Config.User}}')" = '65532:65532'
+          test "$(docker image inspect gha-executor-router:ci --format '{{.Config.User}}')" = '65532:65532'
+          test "$(docker image inspect gha-clone-server:ci --format '{{json .Config.Entrypoint}}')" = '["/usr/local/bin/gha-clone-server"]'
+          test "$(docker image inspect gha-executor-router:ci --format '{{json .Config.Entrypoint}}')" = '["/usr/local/bin/gha-executor-router"]'
+
+      - name: Smoke clone-server health and readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --rm \
+            --name gha-clone-server-ci \
+            --publish 18125:8125 \
+            --env HOST=0.0.0.0 \
+            --env PORT=8125 \
+            --env GHA_CLONE_AUTH_SECRET=ci-only-auth \
+            --env GHA_CLONE_ALLOWED_REPOSITORIES=gha-indie-worker/gha-clone-server.rs \
+            --env GHA_CLONE_WORKFLOW_RULES_JSON='{}' \
+            --env GHA_CLONE_EXECUTION_ENABLED=false \
+            --env GHA_CLONE_WEBHOOK_EXECUTION_ENABLED=false \
+            gha-clone-server:ci
+          for _ in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18125/healthz >/dev/null && \
+               curl --fail --silent http://127.0.0.1:18125/readyz >/dev/null; then
+              docker rm -f gha-clone-server-ci >/dev/null
+              exit 0
+            fi
+            if ! docker inspect gha-clone-server-ci >/dev/null 2>&1; then
+              docker logs gha-clone-server-ci >&2 || true
+              exit 1
+            fi
+            sleep 1
+          done
+          docker logs gha-clone-server-ci >&2 || true
+          docker rm -f gha-clone-server-ci >/dev/null 2>&1 || true
+          exit 1
+
+      - name: Install and run checksum-pinned Gitleaks
+        shell: bash
+        run: |
+          set -euo pipefail
+          version='8.30.1'
+          archive="gitleaks_${version}_linux_x64.tar.gz"
+          curl --fail --location --retry 5 --retry-all-errors \
+            --output "$RUNNER_TEMP/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${version}/${archive}"
+          echo '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  '"$RUNNER_TEMP/$archive" \
+            | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          test "$("$RUNNER_TEMP/gitleaks" version)" = "$version"
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner --verbose .
+
+      - name: Remove validator and publish the validated permanent head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -- .github/workflows/validate-dev-hardening-once.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git diff --cached --check
+          git commit -m 'chore: remove exact-head CI hardening validator'
+          git push origin HEAD:agent/harden-standalone-ci-on-dev-20260808
