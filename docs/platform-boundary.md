@@ -55,7 +55,7 @@ never approximated.
 A planning or execution request contains:
 
 - an exact allowlisted `owner/repository`;
-- a full immutable 40-hex commit SHA;
+- a full immutable 40-character lowercase hexadecimal commit SHA;
 - one direct `.github/workflows/*.yml` or `.yaml` path;
 - a deterministic idempotency key;
 - W3C trace context.
