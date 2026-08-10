@@ -24,4 +24,14 @@ Every synchronization must:
 6. merge through `dev` first and promote `dev` to `main` only through the protected independent-review gate;
 7. never force-push, store a classic PAT, or publish a credential-bearing URL, log, artifact, or Actions output.
 
+Publication and synchronization must fail closed when:
+
+- the source revision is not one full immutable 40-hex commit;
+- any source file, hidden file, executable mode, or `Cargo.lock` entry is omitted;
+- the target introduces an unreviewed manual-only file instead of reconciling it with the source contract;
+- the standalone meta test reaches outside this repository; or
+- the native Rust, real-process, hardened-image, or full-history secret-scan matrix is not green.
+
+The extraction-owned `.github/workflows/ci.yml` and `.github/workflows/gha-clone-server-meta.yml` are root-level workflows in this standalone repository. Their equivalent source copies may remain inert when nested inside the monorepo, but a publication must preserve their behavior and immutable action pins.
+
 The machine-readable architecture contract under `docs/` remains authoritative for ownership, capability, and call-direction boundaries after extraction.
