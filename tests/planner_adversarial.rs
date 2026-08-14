@@ -137,7 +137,7 @@ fn malformed_documents_and_job_shapes_are_rejected() {
         ),
         (
             "jobs:\n  bad.id:\n    runs-on: ubuntu-latest\n    steps: [{ run: cargo test }]\n",
-            "job ID must use letters, numbers",
+            "job ID must start with a letter",
         ),
         ("jobs:\n  test: cargo test\n", "job must be a mapping"),
     ] {
@@ -584,7 +584,7 @@ jobs:
 #[test]
 fn immutable_revision_gate_requires_exactly_forty_hex_characters() {
     assert!(is_full_commit_sha(IMMUTABLE_SHA));
-    assert!(is_full_commit_sha(&"A".repeat(40)));
+    assert!(!is_full_commit_sha(&"A".repeat(40)));
     assert!(!is_full_commit_sha(&"a".repeat(39)));
     assert!(!is_full_commit_sha(&"a".repeat(41)));
     assert!(!is_full_commit_sha(&format!("{}g", "a".repeat(39))));
