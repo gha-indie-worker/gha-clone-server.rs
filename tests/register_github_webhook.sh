@@ -53,13 +53,13 @@ export GH_MOCK_SECRET='unit-test-webhook-secret-xxxxxxxx'
 printf '%s\n' "$GH_MOCK_SECRET" >"$tmp/secret"
 chmod 600 "$tmp/secret"
 
-output="$(GH_DEBUG=api DEBUG=1 "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/secret")"
+output="$(GH_DEBUG=api DEBUG=1 bash "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/secret")"
 [[ "$output" == *'created workflow_run webhook id=77'* ]]
 ! grep -Fq "$GH_MOCK_SECRET" "$GH_MOCK_ARGS"
 grep -Fq -- '--hostname github.com' "$GH_MOCK_ARGS"
 
 export GH_MOCK_DUPLICATE=1
-if "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/secret" >"$tmp/out" 2>"$tmp/err"; then
+if bash "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/secret" >"$tmp/out" 2>"$tmp/err"; then
   echo 'duplicate callback URLs unexpectedly succeeded' >&2
   exit 1
 fi
@@ -68,7 +68,7 @@ unset GH_MOCK_DUPLICATE
 
 printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n' >"$tmp/short"
 chmod 600 "$tmp/short"
-if "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/short" >"$tmp/out" 2>"$tmp/err"; then
+if bash "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/short" >"$tmp/out" 2>"$tmp/err"; then
   echo '31-byte secret plus newline unexpectedly succeeded' >&2
   exit 1
 fi
@@ -76,14 +76,14 @@ grep -Fq '32 to 4096 bytes' "$tmp/err"
 
 cp "$tmp/secret" "$tmp/public-secret"
 chmod 644 "$tmp/public-secret"
-if "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/public-secret" >"$tmp/out" 2>"$tmp/err"; then
+if bash "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/public-secret" >"$tmp/out" 2>"$tmp/err"; then
   echo 'group/world-readable secret unexpectedly succeeded' >&2
   exit 1
 fi
 grep -Fq 'must not be group/world accessible' "$tmp/err"
 
 ln -s "$tmp/secret" "$tmp/secret-link"
-if "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/secret-link" >"$tmp/out" 2>"$tmp/err"; then
+if bash "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/secret-link" >"$tmp/out" 2>"$tmp/err"; then
   echo 'symlink secret unexpectedly succeeded' >&2
   exit 1
 fi
