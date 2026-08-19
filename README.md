@@ -185,24 +185,32 @@ shared secrets in source, Argo parameters, Linear, logs, URLs, or image layers.
 ## Register the GitHub failure webhook
 
 Run `scripts/register-github-webhook.sh` only after the HTTPS ingress and
-ExternalSecret value exist. The script reads `GH_TOKEN` and
-`GITHUB_WEBHOOK_SECRET` from the environment, updates an existing hook with the
-same URL or creates one, sends request bodies through stdin, and never prints
-either secret.
+ExternalSecret value exist. Authentication may come from `GH_TOKEN` or an
+existing `gh auth login`, but the HMAC secret is accepted only through
+`--secret-file`.
+
+The helper rejects symlinks, normalizes one optional terminal line ending,
+validates the actual 32–4096 byte visible-ASCII value, builds the request in a
+mode-`0600` temporary file, and removes it on exit. The secret is never accepted
+from an environment variable, printed, or passed through a process argument.
+The operation fails closed when multiple hooks already use the exact callback
+URL rather than silently updating one and leaving another active.
 
 `ORESoftware` is a GitHub user account, so register a repository hook:
 
 ```console
-GH_TOKEN=... GITHUB_WEBHOOK_SECRET=... \
-  bash scripts/register-github-webhook.sh \
+bash scripts/register-github-webhook.sh \
   --repo ORESoftware/k8s-cluster \
-  --url https://ci.example.com/webhooks/github
+  --url https://ci.example.com/webhooks/github \
+  --secret-file /secure/path/github_webhook_secret
 ```
 
 For an actual GitHub organization, use `--org <organization>`. The registration
 script subscribes only to `workflow_run`; GitHub sends every completed
 conclusion and the Rust service performs the failure-only, exact-path,
-recursion, and duplicate-delivery checks.
+recursion, and duplicate-delivery checks. `tests/register_github_webhook.sh`
+uses a fake `gh` executable to prove the secret does not appear in the argument
+vector and to cover duplicate URLs, newline normalization, and symlink refusal.
 
 ## Deployment state
 
