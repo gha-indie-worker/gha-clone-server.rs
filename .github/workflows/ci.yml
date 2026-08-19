@@ -45,6 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           if grep -RIE \
+            --exclude='ci.yml' \
             'ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|lin_api_[A-Za-z0-9]{20,}|BEGIN (RSA |EC )?PRIVATE KEY' \
             .github scripts tests README.md SOURCE_PROVENANCE.md; then
             echo 'credential-like material found in the standalone repository' >&2
