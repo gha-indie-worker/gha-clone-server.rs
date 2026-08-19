@@ -63,11 +63,20 @@ grep -Fq 'multiple hooks already use the exact callback URL' "$tmp/err"
 unset GH_MOCK_DUPLICATE
 
 printf 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\n' >"$tmp/short"
+chmod 600 "$tmp/short"
 if "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/short" >"$tmp/out" 2>"$tmp/err"; then
   echo '31-byte secret plus newline unexpectedly succeeded' >&2
   exit 1
 fi
 grep -Fq '32 to 4096 bytes' "$tmp/err"
+
+cp "$tmp/secret" "$tmp/public-secret"
+chmod 644 "$tmp/public-secret"
+if "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/public-secret" >"$tmp/out" 2>"$tmp/err"; then
+  echo 'group/world-readable secret unexpectedly succeeded' >&2
+  exit 1
+fi
+grep -Fq 'must not be group/world accessible' "$tmp/err"
 
 ln -s "$tmp/secret" "$tmp/secret-link"
 if "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/secret-link" >"$tmp/out" 2>"$tmp/err"; then
