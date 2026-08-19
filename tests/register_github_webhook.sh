@@ -11,6 +11,9 @@ cat >"$tmp/bin/gh" <<'MOCK'
 #!/usr/bin/env bash
 set -Eeuo pipefail
 printf '%s\n' "$*" >>"${GH_MOCK_ARGS}"
+[[ -z "${GH_DEBUG:-}" ]]
+[[ -z "${DEBUG:-}" ]]
+[[ "$*" == *"--hostname github.com"* ]]
 if [[ "$*" == *"?per_page=100"* ]]; then
   if [[ "${GH_MOCK_DUPLICATE:-0}" == 1 ]]; then
     printf '[{"id":11,"config":{"url":"%s"}},{"id":12,"config":{"url":"%s"}}]\n' \
@@ -50,9 +53,10 @@ export GH_MOCK_SECRET='unit-test-webhook-secret-xxxxxxxx'
 printf '%s\n' "$GH_MOCK_SECRET" >"$tmp/secret"
 chmod 600 "$tmp/secret"
 
-output="$($script --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/secret")"
+output="$(GH_DEBUG=api DEBUG=1 "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/secret")"
 [[ "$output" == *'created workflow_run webhook id=77'* ]]
 ! grep -Fq "$GH_MOCK_SECRET" "$GH_MOCK_ARGS"
+grep -Fq -- '--hostname github.com' "$GH_MOCK_ARGS"
 
 export GH_MOCK_DUPLICATE=1
 if "$script" --repo example/repository --url "$GH_MOCK_URL" --secret-file "$tmp/secret" >"$tmp/out" 2>"$tmp/err"; then
