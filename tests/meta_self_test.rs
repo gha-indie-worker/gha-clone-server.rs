@@ -183,8 +183,15 @@ async fn running_server_submits_its_own_workflow_to_the_fixed_build_profile() {
         .send()
         .await
         .expect("submit meta run");
-    assert_eq!(response.status(), StatusCode::ACCEPTED);
-    let accepted: Value = response.json().await.expect("accepted run JSON");
+    let response_status = response.status();
+    let response_body = response.text().await.expect("meta run response body");
+    assert_eq!(
+        response_status,
+        StatusCode::ACCEPTED,
+        "meta run rejected: {response_body}"
+    );
+    let accepted: Value =
+        serde_json::from_str(&response_body).expect("accepted run response must be JSON");
     let run_id = accepted
         .get("id")
         .and_then(Value::as_str)
