@@ -23,10 +23,11 @@ usage: register-github-webhook.sh \
   --url https://host/webhooks/github \
   --secret-file PATH
 
-Authentication is supplied through GH_TOKEN or an existing `gh auth login`.
-The HMAC secret must be an owner-only, non-symlink regular file containing one
-visible-ASCII line of 32 to 4096 bytes. It is never accepted from an environment
-variable, printed, or placed in a process argument.
+Authentication is supplied through GH_TOKEN or an existing `gh auth login` for
+github.com. The HMAC secret must be an owner-only, non-symlink regular file
+containing one visible-ASCII line of 32 to 4096 bytes. It is never accepted from
+an environment variable, printed, or placed in a process argument. Debug HTTP
+tracing is forcibly disabled for secret-bearing API requests.
 USAGE
 }
 
@@ -64,6 +65,10 @@ done
 command -v gh >/dev/null 2>&1 || { echo "$script_name: gh is required" >&2; exit 69; }
 command -v jq >/dev/null 2>&1 || { echo "$script_name: jq is required" >&2; exit 69; }
 command -v python3 >/dev/null 2>&1 || { echo "$script_name: python3 is required" >&2; exit 69; }
+
+github_api() {
+  env -u GH_DEBUG -u DEBUG gh api --hostname github.com "$@"
+}
 
 [[ -n "$scope" && -n "$target" && -n "$webhook_url" && -n "$secret_file" ]] || {
   usage
@@ -164,7 +169,7 @@ with os.fdopen(output, "wb") as handle:
 PY
 
 existing_ids="$(
-  gh api "${endpoint}?per_page=100" --paginate \
+  github_api "${endpoint}?per_page=100" --paginate \
     | jq -r --arg url "$webhook_url" '.[] | select(.config.url == $url) | .id'
 )"
 match_count="$(printf '%s\n' "$existing_ids" | awk 'NF { count += 1 } END { print count + 0 }')"
@@ -191,10 +196,10 @@ jq -cn \
 
 if [[ -n "$existing_id" ]]; then
   [[ "$existing_id" =~ ^[0-9]+$ ]] || { echo "$script_name: GitHub returned a non-numeric hook id" >&2; exit 1; }
-  result="$(gh api --method PATCH "${endpoint}/${existing_id}" --input "$payload_file")"
+  result="$(github_api --method PATCH "${endpoint}/${existing_id}" --input "$payload_file")"
   action='updated'
 else
-  result="$(gh api --method POST "$endpoint" --input "$payload_file")"
+  result="$(github_api --method POST "$endpoint" --input "$payload_file")"
   action='created'
 fi
 
