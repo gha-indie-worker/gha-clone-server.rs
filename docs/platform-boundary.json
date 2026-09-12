@@ -41,7 +41,7 @@
       "traceparent"
     ],
     "repository": "exact owner/name allowlist entry",
-    "immutable_commit_sha": "exact 40 lowercase or uppercase hexadecimal Git object id",
+    "immutable_commit_sha": "exact 40-character lowercase hexadecimal Git commit id",
     "workflow_path": "direct file under .github/workflows with .yml or .yaml suffix",
     "workflow_bytes": "bounded before parsing",
     "forbidden": [

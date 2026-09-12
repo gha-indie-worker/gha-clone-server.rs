@@ -22,9 +22,9 @@ use tokio::{
 
 const SERVER_AUTH: &str = "meta-server-auth";
 const BUILD_AUTH: &str = "meta-build-auth";
-const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 const REPOSITORY: &str = "gha-indie-worker/gha-clone-server.rs";
 const WORKFLOW_PATH: &str = ".github/workflows/gha-clone-server-meta.yml";
+const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 
 #[derive(Clone, Default)]
 struct MockBuildState {
@@ -114,7 +114,7 @@ async fn wait_until_ready(client: &reqwest::Client, base_url: &str, child: &mut 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn running_server_submits_its_own_workflow_to_the_fixed_build_profile() {
+async fn running_server_submits_the_standalone_workflow_to_the_fixed_build_profile() {
     let mock_state = MockBuildState::default();
     let mock_listener = TcpListener::bind("127.0.0.1:0")
         .await
