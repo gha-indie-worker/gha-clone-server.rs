@@ -17,3 +17,6 @@ env/dec/
 keys.txt
 sops-private*.txt
 # Repository-local temporary data and authorized Git worktrees
+# Sanctioned scratch locations - AGENTS.md requires both, trailing-slash form
+tmp/
+temp/
