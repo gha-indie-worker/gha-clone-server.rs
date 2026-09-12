@@ -197,14 +197,12 @@ pub fn build_plan(
         return Err(errors);
     }
 
-    let mut workflow_reasons = Vec::new();
-    for key in root.keys().filter_map(Value::as_str) {
-        if !matches!(key, "name" | "run-name" | "on" | "jobs") {
-            workflow_reasons.push(format!(
-                "workflow-level {key} is unsupported by the independent lane"
-            ));
-        }
-    }
+    let workflow_reasons = root
+        .keys()
+        .filter_map(Value::as_str)
+        .filter(|key| !matches!(*key, "name" | "run-name" | "on" | "jobs"))
+        .map(|key| format!("workflow-level {key} is unsupported by the independent lane"))
+        .collect::<Vec<_>>();
 
     let job_ids = jobs
         .keys()
@@ -294,14 +292,14 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
         ));
     }
 
-    let mut reasons = Vec::new();
     let mut notes = Vec::new();
     let mut combined = String::new();
     let has_services = mapping_get(job, "services").is_some();
     let has_container = mapping_get(job, "container").is_some();
     let has_strategy = mapping_get(job, "strategy").is_some();
+    let runner_text = runs_on.join(" ").to_ascii_lowercase();
 
-    for key in [
+    let mut reasons = [
         "uses",
         "permissions",
         "environment",
@@ -310,35 +308,34 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
         "outputs",
         "continue-on-error",
         "timeout-minutes",
-    ] {
-        if mapping_get(job, key).is_some() {
-            reasons.push(format!(
-                "job-level {key} is unsupported by the independent lane"
-            ));
-        }
-    }
-    if has_services {
-        reasons.push("service containers require the isolated ARC DinD lane".into());
-    }
-    if has_container {
-        reasons.push("job containers are not reproduced by the independent lane".into());
-    }
-    if has_strategy {
-        reasons.push("dynamic strategy/matrix expansion is unsupported".into());
-    }
-    let runner_text = runs_on.join(" ").to_ascii_lowercase();
-    if runner_text.contains("macos") || runner_text.contains("windows") {
-        reasons.push("non-Linux native execution is unavailable in the independent lane".into());
-    }
-    if let Some(value) = mapping_get(job, "if") {
-        reasons.push(format!(
+    ]
+    .into_iter()
+    .filter(|key| mapping_get(job, key).is_some())
+    .map(|key| format!("job-level {key} is unsupported by the independent lane"))
+    .chain(
+        has_services.then(|| "service containers require the isolated ARC DinD lane".to_string()),
+    )
+    .chain(
+        has_container
+            .then(|| "job containers are not reproduced by the independent lane".to_string()),
+    )
+    .chain(has_strategy.then(|| "dynamic strategy/matrix expansion is unsupported".to_string()))
+    .chain(
+        (runner_text.contains("macos") || runner_text.contains("windows")).then(|| {
+            "non-Linux native execution is unavailable in the independent lane".to_string()
+        }),
+    )
+    .chain(mapping_get(job, "if").map(|value| {
+        format!(
             "job-level if condition is unsupported: {}",
             compact_yaml(value)
-        ));
-    }
-    if contains_secret_expression(mapping_get(job, "env")) {
-        reasons.push("job environment contains a secret expression".into());
-    }
+        )
+    }))
+    .chain(
+        contains_secret_expression(mapping_get(job, "env"))
+            .then(|| "job environment contains a secret expression".to_string()),
+    )
+    .collect::<Vec<_>>();
 
     let Some(steps) = mapping_get(job, "steps").and_then(Value::as_sequence) else {
         errors.push(format!("jobs.{id}.steps must be a sequence"));
