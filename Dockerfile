@@ -49,12 +49,14 @@ COPY --from=builder --chown=65532:65532 /out/gha-clone-server /usr/local/bin/gha
 EXPOSE 8125
 ENTRYPOINT ["/usr/local/bin/gha-clone-server"]
 
-FROM runtime AS executor-router
-COPY --from=builder --chown=65532:65532 /out/gha-executor-router /usr/local/bin/gha-executor-router
-EXPOSE 8126
-ENTRYPOINT ["/usr/local/bin/gha-executor-router"]
-
 FROM runtime AS pr-gateway
 COPY --from=builder --chown=65532:65532 /out/indiebuild-pr-gateway /usr/local/bin/indiebuild-pr-gateway
 EXPOSE 8127
 ENTRYPOINT ["/usr/local/bin/indiebuild-pr-gateway"]
+
+# Keep the historical final/default stage unchanged so existing image builds
+# still publish the executor-router unless they explicitly select --target pr-gateway.
+FROM runtime AS executor-router
+COPY --from=builder --chown=65532:65532 /out/gha-executor-router /usr/local/bin/gha-executor-router
+EXPOSE 8126
+ENTRYPOINT ["/usr/local/bin/gha-executor-router"]
