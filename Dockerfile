@@ -14,9 +14,11 @@ COPY src ./src
 RUN set -eux; \
     cargo build --locked --release \
       --bin gha-clone-server \
-      --bin gha-executor-router; \
+      --bin gha-executor-router \
+      --bin indiebuild-pr-gateway; \
     install -D -m 0555 target/release/gha-clone-server /out/gha-clone-server; \
     install -D -m 0555 target/release/gha-executor-router /out/gha-executor-router; \
+    install -D -m 0555 target/release/indiebuild-pr-gateway /out/indiebuild-pr-gateway; \
     test ! -e /out/cargo; \
     test ! -e /out/rustc
 
@@ -51,3 +53,8 @@ FROM runtime AS executor-router
 COPY --from=builder --chown=65532:65532 /out/gha-executor-router /usr/local/bin/gha-executor-router
 EXPOSE 8126
 ENTRYPOINT ["/usr/local/bin/gha-executor-router"]
+
+FROM runtime AS pr-gateway
+COPY --from=builder --chown=65532:65532 /out/indiebuild-pr-gateway /usr/local/bin/indiebuild-pr-gateway
+EXPOSE 8127
+ENTRYPOINT ["/usr/local/bin/indiebuild-pr-gateway"]
