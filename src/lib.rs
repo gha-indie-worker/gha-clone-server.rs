@@ -4,6 +4,7 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_yaml::{Mapping, Value};
 use sha2::{Digest, Sha256};
+use yaml_rust2::scanner::{Scanner, TokenType};
 
 pub const SERVICE_NAME: &str = "gha-clone-server";
 pub const PLAN_SCHEMA_VERSION: &str = "gha-clone-plan.v1";
@@ -174,8 +175,14 @@ pub fn build_plan(
         return Err(errors);
     }
 
+    validate_yaml_tokens(&request.workflow_yaml)?;
     let workflow: Value = serde_yaml::from_str(&request.workflow_yaml)
         .map_err(|error| vec![format!("workflowYaml is not valid YAML: {error}")])?;
+    if contains_merge_key(&workflow) {
+        return Err(vec![
+            "workflowYaml uses YAML merge keys, which are unsupported".to_string(),
+        ]);
+    }
     let root = workflow
         .as_mapping()
         .ok_or_else(|| vec!["workflow document must be a YAML mapping".to_string()])?;
@@ -197,14 +204,12 @@ pub fn build_plan(
         return Err(errors);
     }
 
-    let mut workflow_reasons = Vec::new();
-    for key in root.keys().filter_map(Value::as_str) {
-        if !matches!(key, "name" | "run-name" | "on" | "jobs") {
-            workflow_reasons.push(format!(
-                "workflow-level {key} is unsupported by the independent lane"
-            ));
-        }
-    }
+    let workflow_reasons = root
+        .keys()
+        .filter_map(Value::as_str)
+        .filter(|key| !matches!(*key, "name" | "run-name" | "on" | "jobs"))
+        .map(|key| format!("workflow-level {key} is unsupported by the independent lane"))
+        .collect::<Vec<_>>();
 
     let job_ids = jobs
         .keys()
@@ -223,7 +228,7 @@ pub fn build_plan(
             .to_string();
         if !valid_job_id(&id) {
             errors.push(format!(
-                "jobs.{id}: job ID must use letters, numbers, '_', or '-' and be at most 100 characters"
+                "jobs.{id}: job ID must start with a letter or '_' and then use only letters, numbers, '_', or '-' (maximum 100 characters)"
             ));
             continue;
         }
@@ -294,14 +299,14 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
         ));
     }
 
-    let mut reasons = Vec::new();
     let mut notes = Vec::new();
     let mut combined = String::new();
     let has_services = mapping_get(job, "services").is_some();
     let has_container = mapping_get(job, "container").is_some();
     let has_strategy = mapping_get(job, "strategy").is_some();
+    let runner_text = runs_on.join(" ").to_ascii_lowercase();
 
-    for key in [
+    let mut reasons = [
         "uses",
         "permissions",
         "environment",
@@ -310,35 +315,34 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
         "outputs",
         "continue-on-error",
         "timeout-minutes",
-    ] {
-        if mapping_get(job, key).is_some() {
-            reasons.push(format!(
-                "job-level {key} is unsupported by the independent lane"
-            ));
-        }
-    }
-    if has_services {
-        reasons.push("service containers require the isolated ARC DinD lane".into());
-    }
-    if has_container {
-        reasons.push("job containers are not reproduced by the independent lane".into());
-    }
-    if has_strategy {
-        reasons.push("dynamic strategy/matrix expansion is unsupported".into());
-    }
-    let runner_text = runs_on.join(" ").to_ascii_lowercase();
-    if runner_text.contains("macos") || runner_text.contains("windows") {
-        reasons.push("non-Linux native execution is unavailable in the independent lane".into());
-    }
-    if let Some(value) = mapping_get(job, "if") {
-        reasons.push(format!(
+    ]
+    .into_iter()
+    .filter(|key| mapping_get(job, key).is_some())
+    .map(|key| format!("job-level {key} is unsupported by the independent lane"))
+    .chain(
+        has_services.then(|| "service containers require the isolated ARC DinD lane".to_string()),
+    )
+    .chain(
+        has_container
+            .then(|| "job containers are not reproduced by the independent lane".to_string()),
+    )
+    .chain(has_strategy.then(|| "dynamic strategy/matrix expansion is unsupported".to_string()))
+    .chain(
+        (runner_text.contains("macos") || runner_text.contains("windows")).then(|| {
+            "non-Linux native execution is unavailable in the independent lane".to_string()
+        }),
+    )
+    .chain(mapping_get(job, "if").map(|value| {
+        format!(
             "job-level if condition is unsupported: {}",
             compact_yaml(value)
-        ));
-    }
-    if contains_secret_expression(mapping_get(job, "env")) {
-        reasons.push("job environment contains a secret expression".into());
-    }
+        )
+    }))
+    .chain(
+        contains_secret_expression(mapping_get(job, "env"))
+            .then(|| "job environment contains a secret expression".to_string()),
+    )
+    .collect::<Vec<_>>();
 
     let Some(steps) = mapping_get(job, "steps").and_then(Value::as_sequence) else {
         errors.push(format!("jobs.{id}.steps must be a sequence"));
@@ -598,6 +602,55 @@ fn parse_string_or_sequence(
     }
 }
 
+fn validate_yaml_tokens(input: &str) -> Result<(), Vec<String>> {
+    let mut saw_document_content = false;
+    let mut saw_document_start = false;
+
+    let mut scanner = Scanner::new(input.chars());
+    while let Some(token) = scanner
+        .next_token()
+        .map_err(|error| vec![format!("workflowYaml is not valid YAML: {error}")])?
+    {
+        let token = token.1;
+        match token {
+            TokenType::StreamStart(_) | TokenType::StreamEnd => {}
+            TokenType::DocumentStart if !saw_document_content && !saw_document_start => {
+                saw_document_start = true;
+            }
+            TokenType::DocumentStart | TokenType::DocumentEnd => {
+                return Err(vec![
+                    "workflowYaml must contain exactly one YAML document".to_string()
+                ]);
+            }
+            TokenType::Alias(_) | TokenType::Anchor(_) => {
+                return Err(vec![
+                    "workflowYaml YAML anchors and aliases are unsupported".to_string(),
+                ]);
+            }
+            TokenType::Tag(_, _)
+            | TokenType::TagDirective(_, _)
+            | TokenType::VersionDirective(_, _) => {
+                return Err(vec![
+                    "workflowYaml YAML tags and directives are unsupported".to_string(),
+                ]);
+            }
+            _ => saw_document_content = true,
+        }
+    }
+    Ok(())
+}
+
+fn contains_merge_key(value: &Value) -> bool {
+    match value {
+        Value::Mapping(mapping) => mapping.iter().any(|(key, value)| {
+            key.as_str() == Some("<<") || contains_merge_key(key) || contains_merge_key(value)
+        }),
+        Value::Sequence(values) => values.iter().any(contains_merge_key),
+        Value::Tagged(tagged) => contains_merge_key(&tagged.value),
+        _ => false,
+    }
+}
+
 fn contains_secret_expression(value: Option<&Value>) -> bool {
     value.is_some_and(|value| {
         let text = compact_yaml(value).to_ascii_lowercase();
@@ -664,15 +717,22 @@ fn valid_workflow_path(value: &str) -> bool {
 }
 
 fn valid_job_id(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 100
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    if value.is_empty() || value.len() > 100 {
+        return false;
+    }
+    let mut bytes = value.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first.is_ascii_alphabetic() || first == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
 }
 
 pub fn is_full_commit_sha(value: &str) -> bool {
-    value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    value.len() == 40
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 fn plan_id(request: &PlanRequest) -> String {
@@ -908,6 +968,47 @@ jobs:
         assert!(!plan.immutable_revision);
         assert!(!plan.independent_executable);
         assert!(!plan.warnings.is_empty());
+
+        request.revision = "0123456789ABCDEF0123456789ABCDEF01234567".into();
+        let plan = build_plan(&request, &PlannerLimits::default()).expect("valid plan");
+        assert!(!plan.immutable_revision);
+        assert!(!plan.independent_executable);
+    }
+
+    #[test]
+    fn job_identifiers_match_github_actions_syntax() {
+        for invalid_id in ["1test", "-test", "test.job", "test job"] {
+            let yaml = format!(
+                "jobs:\n  {invalid_id}:\n    runs-on: ubuntu-latest\n    steps: [{{ run: cargo test }}]\n"
+            );
+            let errors = build_plan(&request(&yaml), &PlannerLimits::default())
+                .expect_err("invalid GitHub Actions job ID must be rejected");
+            assert!(errors.iter().any(|error| error.contains("job ID")));
+        }
+
+        for valid_id in ["test", "_test", "Test-1"] {
+            let yaml = format!(
+                "jobs:\n  {valid_id}:\n    runs-on: ubuntu-latest\n    steps: [{{ run: cargo test }}]\n"
+            );
+            assert!(build_plan(&request(&yaml), &PlannerLimits::default()).is_ok());
+        }
+    }
+
+    #[test]
+    fn ambiguous_yaml_is_rejected_before_workflow_planning() {
+        for yaml in [
+            "jobs:\n  test:\n    runs-on: ubuntu-latest\n    runs-on: self-hosted\n    steps: [{ run: cargo test }]\n",
+            "defaults: &job\n  runs-on: ubuntu-latest\n  steps: [{ run: cargo test }]\njobs:\n  test: *job\n",
+            "defaults: &job\n  runs-on: ubuntu-latest\n  steps: [{ run: cargo test }]\njobs:\n  test:\n    <<: *job\n",
+            "jobs:\n  test:\n    <<: { name: merged }\n    runs-on: ubuntu-latest\n    steps: [{ run: cargo test }]\n",
+            "jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps: [{ run: cargo test }]\n---\njobs: {}\n",
+            "jobs:\n  test:\n    runs-on: !runner ubuntu-latest\n    steps: [{ run: cargo test }]\n",
+        ] {
+            assert!(
+                build_plan(&request(yaml), &PlannerLimits::default()).is_err(),
+                "ambiguous YAML was accepted: {yaml:?}"
+            );
+        }
     }
 
     #[test]
