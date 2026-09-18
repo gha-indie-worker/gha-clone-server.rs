@@ -755,6 +755,18 @@ async fn github_webhook(
         .into_response()
 }
 
+/// An upstream transport failure, with the request URL removed.
+///
+/// `reqwest::Error`'s `Display` appends ` for url (<the full request URL>)`
+/// whenever the error carries one, so interpolating the error puts the
+/// build-server URL into the message. These messages do not stay local: they
+/// are logged, and `execute_plan`'s caller also stores them on the run record,
+/// which the run-status route hands back to API callers. `without_url` keeps
+/// the failure class and its source chain and drops only the URL.
+fn upstream_failure(context: &str, error: reqwest::Error) -> String {
+    format!("{context}: {}", error.without_url())
+}
+
 async fn execute_plan(state: &AppState, run_id: Uuid, plan: WorkflowPlan) -> Result<(), String> {
     const ROUTINE_ID: &str = "ores-routine-9og1mMPfsun_z07wEX1kn";
     let build_server_url = state
@@ -812,12 +824,17 @@ async fn execute_plan(state: &AppState, run_id: Uuid, plan: WorkflowPlan) -> Res
             .json(&request)
             .send()
             .await
-            .map_err(|error| format!("build server submission failed for {job_id}: {error}"))?;
+            .map_err(|error| {
+                upstream_failure(
+                    &format!("build server submission failed for {job_id}"),
+                    error,
+                )
+            })?;
         let status = response.status();
         let body = response
             .text()
             .await
-            .map_err(|error| format!("build server response read failed: {error}"))?;
+            .map_err(|error| upstream_failure("build server response read failed", error))?;
         if status != StatusCode::ACCEPTED {
             return Err(format!(
                 "build server rejected {job_id} with HTTP {status}: {}",
@@ -934,12 +951,12 @@ async fn wait_for_build(
             .header("x-build-server-auth", build_server_auth)
             .send()
             .await
-            .map_err(|error| format!("build status request failed: {error}"))?;
+            .map_err(|error| upstream_failure("build status request failed", error))?;
         let status = response.status();
         let body = response
             .text()
             .await
-            .map_err(|error| format!("build status response read failed: {error}"))?;
+            .map_err(|error| upstream_failure("build status response read failed", error))?;
         if status != StatusCode::OK {
             return Err(format!(
                 "build status returned HTTP {status}: {}",
