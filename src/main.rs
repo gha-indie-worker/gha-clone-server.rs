@@ -761,8 +761,12 @@ async fn github_webhook(
 /// whenever the error carries one, so interpolating the error puts the
 /// build-server URL into the message. These messages do not stay local: they
 /// are logged, and `execute_plan`'s caller also stores them on the run record,
-/// which the run-status route hands back to API callers. `without_url` keeps
-/// the failure class and its source chain and drops only the URL.
+/// which the run-status route hands back to API callers. The mirrored-workflow
+/// route is blunter still: it puts `fetch_workflow`'s error straight into the
+/// 502 JSON body, and that URL is built from webhook-supplied `repository`,
+/// `path` and `revision` plus the configured GitHub API base URL.
+/// `without_url` keeps the failure class and its source chain and drops only
+/// the URL.
 fn upstream_failure(context: &str, error: reqwest::Error) -> String {
     format!("{context}: {}", error.without_url())
 }
@@ -1005,12 +1009,12 @@ async fn fetch_workflow(
     let response = request
         .send()
         .await
-        .map_err(|error| format!("GitHub workflow fetch failed: {error}"))?;
+        .map_err(|error| upstream_failure("GitHub workflow fetch failed", error))?;
     let status = response.status();
     let body = response
         .text()
         .await
-        .map_err(|error| format!("GitHub workflow response read failed: {error}"))?;
+        .map_err(|error| upstream_failure("GitHub workflow response read failed", error))?;
     if !status.is_success() {
         return Err(format!(
             "GitHub workflow fetch returned HTTP {status}: {}",
@@ -1658,6 +1662,39 @@ mod tests {
         let message = upstream_failure("build server submission failed for jobA", error);
         assert!(message.starts_with("build server submission failed for jobA: "));
         for fragment in ["build-server.invalid", "/builds", "token-shaped=segment"] {
+            assert!(
+                !message.contains(fragment),
+                "{fragment} survived into the failure message: {message}"
+            );
+        }
+    }
+
+    /// `fetch_workflow` builds its URL out of the configured GitHub API base
+    /// and the webhook-supplied repository, path and revision, and the
+    /// mirrored-workflow route returns that error verbatim in the 502 body. So
+    /// none of those components may survive into the message.
+    #[tokio::test]
+    async fn github_workflow_failures_do_not_carry_the_api_base_or_request_path() {
+        let url = "http://github-api.invalid/repos/acme/secret-repo/contents/.github/workflows/deploy.yml?ref=0123456789abcdef0123456789abcdef01234567";
+        let error = reqwest::Client::new()
+            .get(url)
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await
+            .expect_err("an unresolvable host cannot answer");
+        assert!(
+            error.to_string().contains("github-api.invalid"),
+            "premise failed, reqwest no longer names the URL: {error}"
+        );
+
+        let message = upstream_failure("GitHub workflow fetch failed", error);
+        assert!(message.starts_with("GitHub workflow fetch failed: "));
+        for fragment in [
+            "github-api.invalid",
+            "acme/secret-repo",
+            "deploy.yml",
+            "0123456789abcdef",
+        ] {
             assert!(
                 !message.contains(fragment),
                 "{fragment} survived into the failure message: {message}"
