@@ -755,6 +755,49 @@ async fn github_webhook(
         .into_response()
 }
 
+/// An upstream transport failure, with the request URL removed.
+///
+/// `reqwest::Error`'s `Display` appends ` for url (<the full request URL>)`
+/// whenever the error carries one, so interpolating the error puts the
+/// build-server URL into the message. These messages do not stay local: they
+/// are logged, and `execute_plan`'s caller also stores them on the run record,
+/// which the run-status route hands back to API callers. The mirrored-workflow
+/// route is blunter still: it puts `fetch_workflow`'s error straight into the
+/// 502 JSON body, and that URL is built from webhook-supplied `repository`,
+/// `path` and `revision` plus the configured GitHub API base URL.
+/// `without_url` keeps the failure class and its source chain and drops only
+/// the URL.
+fn upstream_failure(context: &str, error: reqwest::Error) -> String {
+    let kind = failure_kind(&error);
+    format!("{context}: {} ({kind})", error.without_url())
+}
+
+/// The class of a transport failure, as a fixed slug.
+///
+/// `error.without_url()` renders as the bare string "error sending request" for
+/// every transport failure, because `Display` covers only the top error and
+/// never its source chain. Stripping the URL therefore makes connection
+/// refused, DNS failure and timeout indistinguishable in a message an operator
+/// has to act on. Each slug below is a literal chosen here, never a piece of
+/// the request, so recording it puts nothing caller-supplied back.
+fn failure_kind(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_redirect() {
+        "redirect"
+    } else if error.is_decode() {
+        "decode"
+    } else if error.is_body() {
+        "body"
+    } else if error.is_request() {
+        "request"
+    } else {
+        "other"
+    }
+}
+
 async fn execute_plan(state: &AppState, run_id: Uuid, plan: WorkflowPlan) -> Result<(), String> {
     const ROUTINE_ID: &str = "ores-routine-9og1mMPfsun_z07wEX1kn";
     let build_server_url = state
@@ -812,12 +855,17 @@ async fn execute_plan(state: &AppState, run_id: Uuid, plan: WorkflowPlan) -> Res
             .json(&request)
             .send()
             .await
-            .map_err(|error| format!("build server submission failed for {job_id}: {error}"))?;
+            .map_err(|error| {
+                upstream_failure(
+                    &format!("build server submission failed for {job_id}"),
+                    error,
+                )
+            })?;
         let status = response.status();
         let body = response
             .text()
             .await
-            .map_err(|error| format!("build server response read failed: {error}"))?;
+            .map_err(|error| upstream_failure("build server response read failed", error))?;
         if status != StatusCode::ACCEPTED {
             return Err(format!(
                 "build server rejected {job_id} with HTTP {status}: {}",
@@ -934,12 +982,12 @@ async fn wait_for_build(
             .header("x-build-server-auth", build_server_auth)
             .send()
             .await
-            .map_err(|error| format!("build status request failed: {error}"))?;
+            .map_err(|error| upstream_failure("build status request failed", error))?;
         let status = response.status();
         let body = response
             .text()
             .await
-            .map_err(|error| format!("build status response read failed: {error}"))?;
+            .map_err(|error| upstream_failure("build status response read failed", error))?;
         if status != StatusCode::OK {
             return Err(format!(
                 "build status returned HTTP {status}: {}",
@@ -988,12 +1036,12 @@ async fn fetch_workflow(
     let response = request
         .send()
         .await
-        .map_err(|error| format!("GitHub workflow fetch failed: {error}"))?;
+        .map_err(|error| upstream_failure("GitHub workflow fetch failed", error))?;
     let status = response.status();
     let body = response
         .text()
         .await
-        .map_err(|error| format!("GitHub workflow response read failed: {error}"))?;
+        .map_err(|error| upstream_failure("GitHub workflow response read failed", error))?;
     if !status.is_success() {
         return Err(format!(
             "GitHub workflow fetch returned HTTP {status}: {}",
@@ -1615,5 +1663,76 @@ mod tests {
         assert!(runs
             .values()
             .any(|run| matches!(run.status, RunStatus::Running)));
+    }
+
+    /// `reqwest::Error`'s `Display` names the URL it was trying to reach, and
+    /// these messages are logged and stored on the run record. Build a real
+    /// transport error so the assertion is about reqwest's actual behaviour
+    /// rather than a guess at its wording.
+    #[tokio::test]
+    async fn upstream_failures_do_not_carry_the_build_server_url() {
+        // Reserved by RFC 6761 to never resolve, so this always fails to send.
+        let url = "http://build-server.invalid/builds?token-shaped=segment";
+        let error = reqwest::Client::new()
+            .post(url)
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await
+            .expect_err("an unresolvable host cannot answer");
+
+        // The premise: reqwest puts the URL in the message it is asked for.
+        assert!(
+            error.to_string().contains("build-server.invalid"),
+            "premise failed, reqwest no longer names the URL: {error}"
+        );
+
+        let message = upstream_failure("build server submission failed for jobA", error);
+        assert!(message.starts_with("build server submission failed for jobA: "));
+        // Stripping the URL leaves reqwest's Display as the bare
+        // "error sending request", so the class must be recorded separately or
+        // the message tells an operator nothing.
+        assert!(
+            message.ends_with("(connect)"),
+            "the failure class is missing: {message}"
+        );
+        for fragment in ["build-server.invalid", "/builds", "token-shaped=segment"] {
+            assert!(
+                !message.contains(fragment),
+                "{fragment} survived into the failure message: {message}"
+            );
+        }
+    }
+
+    /// `fetch_workflow` builds its URL out of the configured GitHub API base
+    /// and the webhook-supplied repository, path and revision, and the
+    /// mirrored-workflow route returns that error verbatim in the 502 body. So
+    /// none of those components may survive into the message.
+    #[tokio::test]
+    async fn github_workflow_failures_do_not_carry_the_api_base_or_request_path() {
+        let url = "http://github-api.invalid/repos/acme/secret-repo/contents/.github/workflows/deploy.yml?ref=0123456789abcdef0123456789abcdef01234567";
+        let error = reqwest::Client::new()
+            .get(url)
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await
+            .expect_err("an unresolvable host cannot answer");
+        assert!(
+            error.to_string().contains("github-api.invalid"),
+            "premise failed, reqwest no longer names the URL: {error}"
+        );
+
+        let message = upstream_failure("GitHub workflow fetch failed", error);
+        assert!(message.starts_with("GitHub workflow fetch failed: "));
+        for fragment in [
+            "github-api.invalid",
+            "acme/secret-repo",
+            "deploy.yml",
+            "0123456789abcdef",
+        ] {
+            assert!(
+                !message.contains(fragment),
+                "{fragment} survived into the failure message: {message}"
+            );
+        }
     }
 }
