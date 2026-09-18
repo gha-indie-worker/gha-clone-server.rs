@@ -768,7 +768,34 @@ async fn github_webhook(
 /// `without_url` keeps the failure class and its source chain and drops only
 /// the URL.
 fn upstream_failure(context: &str, error: reqwest::Error) -> String {
-    format!("{context}: {}", error.without_url())
+    let kind = failure_kind(&error);
+    format!("{context}: {} ({kind})", error.without_url())
+}
+
+/// The class of a transport failure, as a fixed slug.
+///
+/// `error.without_url()` renders as the bare string "error sending request" for
+/// every transport failure, because `Display` covers only the top error and
+/// never its source chain. Stripping the URL therefore makes connection
+/// refused, DNS failure and timeout indistinguishable in a message an operator
+/// has to act on. Each slug below is a literal chosen here, never a piece of
+/// the request, so recording it puts nothing caller-supplied back.
+fn failure_kind(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_redirect() {
+        "redirect"
+    } else if error.is_decode() {
+        "decode"
+    } else if error.is_body() {
+        "body"
+    } else if error.is_request() {
+        "request"
+    } else {
+        "other"
+    }
 }
 
 async fn execute_plan(state: &AppState, run_id: Uuid, plan: WorkflowPlan) -> Result<(), String> {
@@ -1661,6 +1688,13 @@ mod tests {
 
         let message = upstream_failure("build server submission failed for jobA", error);
         assert!(message.starts_with("build server submission failed for jobA: "));
+        // Stripping the URL leaves reqwest's Display as the bare
+        // "error sending request", so the class must be recorded separately or
+        // the message tells an operator nothing.
+        assert!(
+            message.ends_with("(connect)"),
+            "the failure class is missing: {message}"
+        );
         for fragment in ["build-server.invalid", "/builds", "token-shaped=segment"] {
             assert!(
                 !message.contains(fragment),
