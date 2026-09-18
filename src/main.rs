@@ -1633,4 +1633,35 @@ mod tests {
             .values()
             .any(|run| matches!(run.status, RunStatus::Running)));
     }
+
+    /// `reqwest::Error`'s `Display` names the URL it was trying to reach, and
+    /// these messages are logged and stored on the run record. Build a real
+    /// transport error so the assertion is about reqwest's actual behaviour
+    /// rather than a guess at its wording.
+    #[tokio::test]
+    async fn upstream_failures_do_not_carry_the_build_server_url() {
+        // Reserved by RFC 6761 to never resolve, so this always fails to send.
+        let url = "http://build-server.invalid/builds?token-shaped=segment";
+        let error = reqwest::Client::new()
+            .post(url)
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await
+            .expect_err("an unresolvable host cannot answer");
+
+        // The premise: reqwest puts the URL in the message it is asked for.
+        assert!(
+            error.to_string().contains("build-server.invalid"),
+            "premise failed, reqwest no longer names the URL: {error}"
+        );
+
+        let message = upstream_failure("build server submission failed for jobA", error);
+        assert!(message.starts_with("build server submission failed for jobA: "));
+        for fragment in ["build-server.invalid", "/builds", "token-shaped=segment"] {
+            assert!(
+                !message.contains(fragment),
+                "{fragment} survived into the failure message: {message}"
+            );
+        }
+    }
 }
