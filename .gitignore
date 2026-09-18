@@ -1,3 +1,9 @@
 /target/
-/tmp/
-/temp/
+
+# Repository-local temporary data and authorized Git worktrees.
+# AGENTS.md requires tmp and temp both ignored, in the trailing-slash
+# (directory) form, together with their worktrees subdirectories.
+tmp/
+temp/
+tmp/worktrees
+temp/worktrees
