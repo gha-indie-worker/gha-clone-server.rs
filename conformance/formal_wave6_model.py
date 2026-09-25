@@ -17,6 +17,14 @@ def step(state, event):
     return None
 
 
+def compress(history):
+    out = [history[0]]
+    for state in history[1:]:
+        if state != out[-1]:
+            out.append(state)
+    return out
+
+
 EVENTS = ("prepare", "clone", "verify", "noop")
 reached_verified = False
 rejected_illegal = False
@@ -37,8 +45,9 @@ for events in product(EVENTS, repeat=4):
     assert all(b >= a for a, b in zip(history, history[1:])), "clone lifecycle regressed"
     if state == VERIFIED:
         reached_verified = True
-        assert history[:4] == [REQUESTED, PREPARED, CLONED, VERIFIED], "verification skipped required stages"
-        assert all(s == VERIFIED for s in history[3:]), "verified clone state was not terminal"
+        assert compress(history) == list(STAGES), "verification skipped or reordered required stages"
+        verified_at = history.index(VERIFIED)
+        assert all(s == VERIFIED for s in history[verified_at:]), "verified clone state was not terminal"
 
 assert reached_verified, "verified clone state is unreachable"
 assert rejected_illegal, "model never exercised an illegal transition"
