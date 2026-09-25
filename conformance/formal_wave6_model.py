@@ -1,19 +1,45 @@
 #!/usr/bin/env python3
 from itertools import product
 
-# Bounded temporal trace check: requested -> prepared -> cloned -> verified.
-STAGES = (0, 1, 2, 3)
+REQUESTED, PREPARED, CLONED, VERIFIED = range(4)
+STAGES = (REQUESTED, PREPARED, CLONED, VERIFIED)
 
-def valid_trace(trace):
-    return trace[0] == 0 and all(b == a or b == a + 1 for a, b in zip(trace, trace[1:]))
 
-seen_terminal = False
-for trace in product(STAGES, repeat=4):
-    if not valid_trace(trace):
+def step(state, event):
+    if event == "prepare" and state == REQUESTED:
+        return PREPARED
+    if event == "clone" and state == PREPARED:
+        return CLONED
+    if event == "verify" and state == CLONED:
+        return VERIFIED
+    if event == "noop":
+        return state
+    return None
+
+
+EVENTS = ("prepare", "clone", "verify", "noop")
+reached_verified = False
+rejected_illegal = False
+for events in product(EVENTS, repeat=4):
+    state = REQUESTED
+    history = [state]
+    legal = True
+    for event in events:
+        nxt = step(state, event)
+        if nxt is None:
+            legal = False
+            rejected_illegal = True
+            break
+        state = nxt
+        history.append(state)
+    if not legal:
         continue
-    assert all(b >= a for a, b in zip(trace, trace[1:])), "clone lifecycle regressed"
-    if trace[-1] == 3:
-        seen_terminal = True
-        assert 1 in trace and 2 in trace, "verification skipped prepare/clone stages"
-assert seen_terminal, "verified clone state is unreachable"
-print("temporal clone lifecycle model: ok")
+    assert all(b >= a for a, b in zip(history, history[1:])), "clone lifecycle regressed"
+    if state == VERIFIED:
+        reached_verified = True
+        assert history[:4] == [REQUESTED, PREPARED, CLONED, VERIFIED], "verification skipped required stages"
+        assert all(s == VERIFIED for s in history[3:]), "verified clone state was not terminal"
+
+assert reached_verified, "verified clone state is unreachable"
+assert rejected_illegal, "model never exercised an illegal transition"
+print("temporal clone lifecycle transition-system model: ok")
