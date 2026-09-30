@@ -17,6 +17,7 @@ use gha_clone_server::{
     build_plan, capabilities, is_full_commit_sha, verify_github_signature, PlanRequest,
     PlannerLimits, WorkflowPlan, SERVICE_NAME,
 };
+use next_loggers::{Logger, Options};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -33,6 +34,9 @@ use uuid::Uuid;
 struct AppState {
     config: Arc<Config>,
     client: reqwest::Client,
+    /// next-loggers run-lifecycle logger; every event carries a static
+    /// `ores-trace-` id and never job secrets, env values, or response bodies.
+    log: Logger,
     runs: Arc<RwLock<BTreeMap<Uuid, RunRecord>>>,
     webhook_deliveries: Arc<RwLock<BTreeMap<String, Instant>>>,
 }
@@ -210,6 +214,7 @@ struct BuildServerRequest<'a> {
 
 #[tokio::main]
 async fn main() {
+    const ROUTINE_ID: &str = "ores-routine-iZ5r5pobjuPZdZIBI_r9q";
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -217,7 +222,18 @@ async fn main() {
         )
         .init();
 
+    let log = Logger::new(Options {
+        app_name: SERVICE_NAME.to_string(),
+        ..Options::default()
+    });
     let config = Config::from_env().unwrap_or_else(|error| {
+        // The error text can quote environment input, so next-loggers only
+        // records the outcome; the operator still sees the detail on stderr.
+        let _ = log
+            .error(vec![json!("configuration rejected; refusing to start")])
+            .add_trace("ores-trace-QYbqvYkFmVcFZKfzqWO4x", false)
+            .add_routine_id(ROUTINE_ID)
+            .send();
         eprintln!("{SERVICE_NAME}: configuration error: {error}");
         std::process::exit(2);
     });
@@ -232,16 +248,31 @@ async fn main() {
             .expect("reqwest client"),
         runs: Arc::new(RwLock::new(BTreeMap::new())),
         webhook_deliveries: Arc::new(RwLock::new(BTreeMap::new())),
+        log: log.clone(),
     };
     let app = router(state);
     let listener = TcpListener::bind(&address)
         .await
         .unwrap_or_else(|error| panic!("failed to bind {address}: {error}"));
     info!(%address, "listening");
+    let _ = log
+        .info(vec![json!("gha-clone-server listening")])
+        .add_trace("ores-trace-hKUwVV-o6E2Lwcy2WmYym", false)
+        .add_routine_id(ROUTINE_ID)
+        .send();
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("server");
+    // Deliberately not closed: detached run tasks can still report terminal
+    // state while the runtime winds down, and a closed logger rejects events.
+    let _ = log
+        .info(vec![json!(
+            "gha-clone-server stopped after graceful shutdown"
+        )])
+        .add_trace("ores-trace-4yjVCd75cr3Et1fXzpeYP", false)
+        .add_routine_id(ROUTINE_ID)
+        .send();
 }
 
 fn router(state: AppState) -> Router {
@@ -345,6 +376,7 @@ async fn create_run(
     headers: HeaderMap,
     Json(request): Json<RunRequest>,
 ) -> Response {
+    const ROUTINE_ID: &str = "ores-routine-j09wjOPISeYnwKENSXzsw";
     if let Err(response) = require_auth(&headers, &state) {
         return response;
     }
@@ -402,9 +434,27 @@ async fn create_run(
         prune_runs(&mut runs, state.config.max_runs);
     }
     let run_id = record.id;
+    let _ = state
+        .log
+        .info(vec![
+            json!("workflow run queued"),
+            json!({ "runId": run_id, "planId": plan.plan_id, "trigger": "api" }),
+        ])
+        .add_trace("ores-trace-xQcth4pDllyqxSDLlKwH-", false)
+        .add_routine_id(ROUTINE_ID)
+        .send();
     tokio::spawn(async move {
         if let Err(error) = execute_plan(&state, run_id, plan).await {
             error!(%run_id, %error, "independent workflow run failed");
+            let _ = state
+                .log
+                .error(vec![
+                    json!("workflow run failed"),
+                    json!({ "runId": run_id, "trigger": "api" }),
+                ])
+                .add_trace("ores-trace-vLIH1StGiH7ncIUNPPKeb", false)
+                .add_routine_id(ROUTINE_ID)
+                .send();
             update_run(&state, run_id, |run| {
                 run.status = RunStatus::Failed;
                 run.error = Some(error);
@@ -439,6 +489,7 @@ async fn github_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    const ROUTINE_ID: &str = "ores-routine-ggbIOoA7u7Zy6yn1f6RIG";
     let Some(secret) = state.config.webhook_secret.as_deref() else {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -644,9 +695,27 @@ async fn github_webhook(
                 runs.insert(run_id, record);
                 prune_runs(&mut runs, state.config.max_runs);
             }
+            let _ = state
+                .log
+                .info(vec![
+                    json!("workflow run queued"),
+                    json!({ "runId": run_id, "planId": plan.plan_id, "trigger": "webhook" }),
+                ])
+                .add_trace("ores-trace-Ukjpsq1yOgk9BG_NU9fSv", false)
+                .add_routine_id(ROUTINE_ID)
+                .send();
             let task_state = state.clone();
             tokio::spawn(async move {
                 if let Err(error) = execute_plan(&task_state, run_id, plan).await {
+                    let _ = task_state
+                        .log
+                        .error(vec![
+                            json!("workflow run failed"),
+                            json!({ "runId": run_id, "trigger": "webhook" }),
+                        ])
+                        .add_trace("ores-trace-aJft3TcyVAoc7N7pqI6vA", false)
+                        .add_routine_id(ROUTINE_ID)
+                        .send();
                     update_run(&task_state, run_id, |run| {
                         run.status = RunStatus::Failed;
                         run.error = Some(error);
@@ -686,7 +755,51 @@ async fn github_webhook(
         .into_response()
 }
 
+/// An upstream transport failure, with the request URL removed.
+///
+/// `reqwest::Error`'s `Display` appends ` for url (<the full request URL>)`
+/// whenever the error carries one, so interpolating the error puts the
+/// build-server URL into the message. These messages do not stay local: they
+/// are logged, and `execute_plan`'s caller also stores them on the run record,
+/// which the run-status route hands back to API callers. The mirrored-workflow
+/// route is blunter still: it puts `fetch_workflow`'s error straight into the
+/// 502 JSON body, and that URL is built from webhook-supplied `repository`,
+/// `path` and `revision` plus the configured GitHub API base URL.
+/// `without_url` keeps the failure class and its source chain and drops only
+/// the URL.
+fn upstream_failure(context: &str, error: reqwest::Error) -> String {
+    let kind = failure_kind(&error);
+    format!("{context}: {} ({kind})", error.without_url())
+}
+
+/// The class of a transport failure, as a fixed slug.
+///
+/// `error.without_url()` renders as the bare string "error sending request" for
+/// every transport failure, because `Display` covers only the top error and
+/// never its source chain. Stripping the URL therefore makes connection
+/// refused, DNS failure and timeout indistinguishable in a message an operator
+/// has to act on. Each slug below is a literal chosen here, never a piece of
+/// the request, so recording it puts nothing caller-supplied back.
+fn failure_kind(error: &reqwest::Error) -> &'static str {
+    if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_redirect() {
+        "redirect"
+    } else if error.is_decode() {
+        "decode"
+    } else if error.is_body() {
+        "body"
+    } else if error.is_request() {
+        "request"
+    } else {
+        "other"
+    }
+}
+
 async fn execute_plan(state: &AppState, run_id: Uuid, plan: WorkflowPlan) -> Result<(), String> {
+    const ROUTINE_ID: &str = "ores-routine-9og1mMPfsun_z07wEX1kn";
     let build_server_url = state
         .config
         .build_server_url
@@ -699,6 +812,19 @@ async fn execute_plan(state: &AppState, run_id: Uuid, plan: WorkflowPlan) -> Res
         .ok_or_else(|| "GHA_CLONE_BUILD_SERVER_AUTH is not configured".to_string())?;
 
     update_run(state, run_id, |run| run.status = RunStatus::Running).await;
+    let _ = state
+        .log
+        .info(vec![
+            json!("workflow run started"),
+            json!({
+                "runId": run_id,
+                "planId": plan.plan_id,
+                "jobCount": plan.topological_order.len(),
+            }),
+        ])
+        .add_trace("ores-trace-GsZ3Cg_Ip-pCRjosQxJOk", false)
+        .add_routine_id(ROUTINE_ID)
+        .send();
     for job_id in &plan.topological_order {
         let job = plan
             .jobs
@@ -729,12 +855,17 @@ async fn execute_plan(state: &AppState, run_id: Uuid, plan: WorkflowPlan) -> Res
             .json(&request)
             .send()
             .await
-            .map_err(|error| format!("build server submission failed for {job_id}: {error}"))?;
+            .map_err(|error| {
+                upstream_failure(
+                    &format!("build server submission failed for {job_id}"),
+                    error,
+                )
+            })?;
         let status = response.status();
         let body = response
             .text()
             .await
-            .map_err(|error| format!("build server response read failed: {error}"))?;
+            .map_err(|error| upstream_failure("build server response read failed", error))?;
         if status != StatusCode::ACCEPTED {
             return Err(format!(
                 "build server rejected {job_id} with HTTP {status}: {}",
@@ -752,6 +883,15 @@ async fn execute_plan(state: &AppState, run_id: Uuid, plan: WorkflowPlan) -> Res
             });
         })
         .await;
+        let _ = state
+            .log
+            .info(vec![
+                json!("workflow job submitted to build server"),
+                json!({ "runId": run_id, "buildJobId": build.id, "profile": profile }),
+            ])
+            .add_trace("ores-trace-oyLq1QcPwmoTozP4TfVLp", false)
+            .add_routine_id(ROUTINE_ID)
+            .send();
 
         let terminal = wait_for_build(
             state,
@@ -772,6 +912,19 @@ async fn execute_plan(state: &AppState, run_id: Uuid, plan: WorkflowPlan) -> Res
         })
         .await;
         if terminal.status != "succeeded" {
+            let _ = state
+                .log
+                .warn(vec![
+                    json!("workflow job ended without success"),
+                    json!({
+                        "runId": run_id,
+                        "buildJobId": terminal.id,
+                        "status": terminal.status,
+                    }),
+                ])
+                .add_trace("ores-trace-5TWZhdYURQM44FGYmMQeg", false)
+                .add_routine_id(ROUTINE_ID)
+                .send();
             return Err(format!(
                 "build-server job {} for workflow job {job_id} ended as {}: {}",
                 terminal.id,
@@ -786,6 +939,15 @@ async fn execute_plan(state: &AppState, run_id: Uuid, plan: WorkflowPlan) -> Res
         run.current_job = None;
     })
     .await;
+    let _ = state
+        .log
+        .info(vec![
+            json!("workflow run succeeded"),
+            json!({ "runId": run_id, "planId": plan.plan_id }),
+        ])
+        .add_trace("ores-trace-zpzaPGO5dRFGRgxeWSQ2O", false)
+        .add_routine_id(ROUTINE_ID)
+        .send();
     Ok(())
 }
 
@@ -796,9 +958,19 @@ async fn wait_for_build(
     workflow_job_id: &str,
     build_job_id: &str,
 ) -> Result<BuildJobResponse, String> {
+    const ROUTINE_ID: &str = "ores-routine-16LXGvxhn2rETbpLzYicz";
     let deadline = Instant::now() + Duration::from_secs(state.config.build_timeout_seconds);
     loop {
         if Instant::now() >= deadline {
+            let _ = state
+                .log
+                .warn(vec![
+                    json!("build-server job exceeded the configured wait budget"),
+                    json!({ "buildJobId": build_job_id }),
+                ])
+                .add_trace("ores-trace-WOThz03mcJyXpNtcKT7Yl", false)
+                .add_routine_id(ROUTINE_ID)
+                .send();
             return Err(format!(
                 "build-server job {build_job_id} for {workflow_job_id} exceeded {} seconds",
                 state.config.build_timeout_seconds
@@ -810,12 +982,12 @@ async fn wait_for_build(
             .header("x-build-server-auth", build_server_auth)
             .send()
             .await
-            .map_err(|error| format!("build status request failed: {error}"))?;
+            .map_err(|error| upstream_failure("build status request failed", error))?;
         let status = response.status();
         let body = response
             .text()
             .await
-            .map_err(|error| format!("build status response read failed: {error}"))?;
+            .map_err(|error| upstream_failure("build status response read failed", error))?;
         if status != StatusCode::OK {
             return Err(format!(
                 "build status returned HTTP {status}: {}",
@@ -829,7 +1001,18 @@ async fn wait_for_build(
             "queued" | "running" => {
                 sleep(Duration::from_secs(state.config.build_poll_seconds)).await
             }
-            other => return Err(format!("build server returned unknown status {other:?}")),
+            other => {
+                let _ = state
+                    .log
+                    .error(vec![
+                        json!("build server returned an unknown job status"),
+                        json!({ "buildJobId": build_job_id }),
+                    ])
+                    .add_trace("ores-trace-qvAtnjmPeqNaUbfwzHJwf", false)
+                    .add_routine_id(ROUTINE_ID)
+                    .send();
+                return Err(format!("build server returned unknown status {other:?}"));
+            }
         }
     }
 }
@@ -853,12 +1036,12 @@ async fn fetch_workflow(
     let response = request
         .send()
         .await
-        .map_err(|error| format!("GitHub workflow fetch failed: {error}"))?;
+        .map_err(|error| upstream_failure("GitHub workflow fetch failed", error))?;
     let status = response.status();
     let body = response
         .text()
         .await
-        .map_err(|error| format!("GitHub workflow response read failed: {error}"))?;
+        .map_err(|error| upstream_failure("GitHub workflow response read failed", error))?;
     if !status.is_success() {
         return Err(format!(
             "GitHub workflow fetch returned HTTP {status}: {}",
@@ -1480,5 +1663,76 @@ mod tests {
         assert!(runs
             .values()
             .any(|run| matches!(run.status, RunStatus::Running)));
+    }
+
+    /// `reqwest::Error`'s `Display` names the URL it was trying to reach, and
+    /// these messages are logged and stored on the run record. Build a real
+    /// transport error so the assertion is about reqwest's actual behaviour
+    /// rather than a guess at its wording.
+    #[tokio::test]
+    async fn upstream_failures_do_not_carry_the_build_server_url() {
+        // Reserved by RFC 6761 to never resolve, so this always fails to send.
+        let url = "http://build-server.invalid/builds?token-shaped=segment";
+        let error = reqwest::Client::new()
+            .post(url)
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await
+            .expect_err("an unresolvable host cannot answer");
+
+        // The premise: reqwest puts the URL in the message it is asked for.
+        assert!(
+            error.to_string().contains("build-server.invalid"),
+            "premise failed, reqwest no longer names the URL: {error}"
+        );
+
+        let message = upstream_failure("build server submission failed for jobA", error);
+        assert!(message.starts_with("build server submission failed for jobA: "));
+        // Stripping the URL leaves reqwest's Display as the bare
+        // "error sending request", so the class must be recorded separately or
+        // the message tells an operator nothing.
+        assert!(
+            message.ends_with("(connect)"),
+            "the failure class is missing: {message}"
+        );
+        for fragment in ["build-server.invalid", "/builds", "token-shaped=segment"] {
+            assert!(
+                !message.contains(fragment),
+                "{fragment} survived into the failure message: {message}"
+            );
+        }
+    }
+
+    /// `fetch_workflow` builds its URL out of the configured GitHub API base
+    /// and the webhook-supplied repository, path and revision, and the
+    /// mirrored-workflow route returns that error verbatim in the 502 body. So
+    /// none of those components may survive into the message.
+    #[tokio::test]
+    async fn github_workflow_failures_do_not_carry_the_api_base_or_request_path() {
+        let url = "http://github-api.invalid/repos/acme/secret-repo/contents/.github/workflows/deploy.yml?ref=0123456789abcdef0123456789abcdef01234567";
+        let error = reqwest::Client::new()
+            .get(url)
+            .timeout(Duration::from_secs(2))
+            .send()
+            .await
+            .expect_err("an unresolvable host cannot answer");
+        assert!(
+            error.to_string().contains("github-api.invalid"),
+            "premise failed, reqwest no longer names the URL: {error}"
+        );
+
+        let message = upstream_failure("GitHub workflow fetch failed", error);
+        assert!(message.starts_with("GitHub workflow fetch failed: "));
+        for fragment in [
+            "github-api.invalid",
+            "acme/secret-repo",
+            "deploy.yml",
+            "0123456789abcdef",
+        ] {
+            assert!(
+                !message.contains(fragment),
+                "{fragment} survived into the failure message: {message}"
+            );
+        }
     }
 }

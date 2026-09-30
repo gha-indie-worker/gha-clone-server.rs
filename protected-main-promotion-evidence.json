@@ -1,0 +1,17 @@
+{
+  "schema_version": "gha-indie-worker.protected-promotion-evidence.v1",
+  "repository": "gha-indie-worker/gha-clone-server.rs",
+  "pull_request_number": 3,
+  "pull_request_url": "https://github.com/gha-indie-worker/gha-clone-server.rs/pull/3",
+  "source_branch": "dev",
+  "target_branch": "main",
+  "source_sha": "c932fa108bb60e08cef4a6208b16fea1757ba771",
+  "feature_head": "5d8f4c00ea359c495b4bc997b29ce22cfc9c9c4f",
+  "integration_merge": "26cc273d1a6c2b25c51d42f4c767baba510aefe3",
+  "integration_ci": "success",
+  "merge_state": "BLOCKED",
+  "independent_review_required": true,
+  "auto_merge_enabled": true,
+  "protection_bypassed": false,
+  "generated_at": "2026-08-08T23:19:24Z"
+}
