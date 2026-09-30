@@ -1,0 +1,186 @@
+{
+  "contract_version": 1,
+  "status": "proposed-defaults",
+  "linear_issue": "DEN-1606",
+  "service": "gha-clone-server",
+  "role": "bounded-independent-ci-continuity-control-plane",
+  "parity_claim": "none",
+  "canonical_ownership": {
+    "official_github_actions_semantics": "GitHub-hosted runners and official Actions Runner Controller",
+    "capacity_and_billing_policy": "gha-capacity-broker-rs",
+    "bounded_planning_and_run_coordination": "gha-clone-server",
+    "cloud_selection_and_provider_status": "gha-executor-router",
+    "fixed_profile_execution_logs_and_artifacts": "dd-build-server",
+    "agent_policy_and_model_routing": "agent-pontifex",
+    "distributed_fencing": "fiducia-cloud"
+  },
+  "owns": [
+    "bounded workflow YAML parsing and validation",
+    "support and parity classification",
+    "immutable run planning",
+    "topological coordination of supported jobs",
+    "fixed-profile dispatch",
+    "webhook failure intake and deduplication"
+  ],
+  "does_not_own": [
+    "GitHub's expression evaluator or proprietary control plane",
+    "arbitrary marketplace action execution",
+    "caller-selected shell execution",
+    "runner capacity or billing policy",
+    "cloud provider selection",
+    "general coding-agent model routing",
+    "product-owned build commands",
+    "human identity"
+  ],
+  "request_contract": {
+    "required_fields": [
+      "repository",
+      "immutable_commit_sha",
+      "workflow_path",
+      "idempotency_key",
+      "traceparent"
+    ],
+    "repository": "exact owner/name allowlist entry",
+    "immutable_commit_sha": "exact 40 lowercase or uppercase hexadecimal Git object id",
+    "workflow_path": "direct file under .github/workflows with .yml or .yaml suffix",
+    "workflow_bytes": "bounded before parsing",
+    "forbidden": [
+      "branch or tag as execution authority",
+      "path traversal",
+      "redirect-followed workflow fetch",
+      "caller-selected working directory",
+      "caller-selected runner image",
+      "caller-selected Kubernetes manifest",
+      "secret or OIDC expression in independent-lane input"
+    ]
+  },
+  "workflow_parser": {
+    "rejects": [
+      "YAML tags",
+      "merge keys",
+      "duplicate mapping keys",
+      "multiple YAML documents",
+      "confusable job or step keys",
+      "dynamic matrix",
+      "dynamic if expression",
+      "job or service container",
+      "reusable workflow",
+      "unsupported marketplace action",
+      "unknown needs dependency",
+      "needs cycle"
+    ],
+    "unsupported_behavior": "return explicit unsupported evidence and do not approximate"
+  },
+  "execution_contract": {
+    "normal_lane": "official GitHub Actions semantics through ARC or GitHub-hosted runners",
+    "independent_lane": "compile a fully supported immutable plan to operator-reviewed fixed profiles",
+    "target_path": [
+      "gha-clone-server",
+      "gha-executor-router",
+      "dd-build-server"
+    ],
+    "transitional_direct_build_server": "allowed only for one reviewed endpoint and fixed profile mapping; the clone server must not select arbitrary providers or commands",
+    "profile_request_fields": [
+      "repository",
+      "immutable_commit_sha",
+      "profile",
+      "request_id",
+      "traceparent"
+    ],
+    "returned_id_validation": "validate syntax and length before constructing poll, log, or artifact URLs"
+  },
+  "admission_and_scaling": {
+    "limits_must_be_strictly_positive": [
+      "workflow bytes",
+      "job count",
+      "steps per job",
+      "active runs",
+      "poll interval",
+      "run timeout",
+      "delivery retention TTL",
+      "delivery retention count",
+      "upstream response bytes"
+    ],
+    "capacity_rule": "reserve process-local active-run capacity before API or webhook task creation and release it on every terminal or rejected path",
+    "single_replica_rule": "webhook execution remains one replica while delivery claims are process-local",
+    "horizontal_scaling_gate": "use a shared durable claim or Fiducia-fenced delivery claim before multiple replicas enable webhook or API execution"
+  },
+  "authentication": {
+    "api": "constant-time comparison of a server-owned secret digest",
+    "github": "short-lived installation-scoped GitHub App token",
+    "build_transport": "separate scoped service credential",
+    "forbidden": [
+      "personal access token in source or task payload",
+      "GitHub App private key in a task payload",
+      "credential in a URL",
+      "credential in logs or artifacts",
+      "shared credential reused across GitHub, planning, and execution boundaries"
+    ]
+  },
+  "failure_semantics": {
+    "unsupported_workflow": "return plan evidence without execution",
+    "ambiguous_build_submission": "reconcile by deterministic request id before retry",
+    "github_fetch_failure": "leave the delivery retryable when no dispatch claim was committed",
+    "capacity_exhausted": "reject or defer before spawning an execution task",
+    "stale_fencing_token": "reject the protected dispatch",
+    "terminal_poll_timeout": "record timeout evidence and stop dependent job submission"
+  },
+  "observability": {
+    "required_resource_attributes": [
+      "service.name",
+      "service.version",
+      "deployment.environment",
+      "product.name",
+      "component.role",
+      "git.commit.sha"
+    ],
+    "required_context": [
+      "request_id",
+      "trace_id",
+      "correlation_id",
+      "workflow_path_class",
+      "lane",
+      "profile",
+      "outcome"
+    ],
+    "forbidden_fields": [
+      "API auth secret",
+      "GitHub token",
+      "build transport credential",
+      "raw Authorization header",
+      "workflow secret expression value",
+      "repository source archive"
+    ],
+    "high_cardinality_metric_labels_forbidden": [
+      "repository",
+      "commit_sha",
+      "workflow_path",
+      "request_id",
+      "run_id",
+      "delivery_id"
+    ],
+    "audit_evidence": [
+      "accepted immutable input",
+      "support classification",
+      "selected fixed profile",
+      "executor route",
+      "build request id",
+      "terminal result",
+      "rejection reason"
+    ]
+  },
+  "deployment": {
+    "default_execution_enabled": false,
+    "default_webhook_execution_enabled": false,
+    "artifact_policy": "build once, test and sign the exact image, deploy by immutable digest",
+    "activation_order": [
+      "provision ExternalSecret values",
+      "verify exact repository and workflow allowlists",
+      "verify fixed profiles and executor routes",
+      "deploy one dormant replica",
+      "run plan-only fixtures",
+      "enable immutable API execution",
+      "enable failure-webhook execution last"
+    ]
+  }
+}
