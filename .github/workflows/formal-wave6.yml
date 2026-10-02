@@ -1,0 +1,41 @@
+name: Formal Wave 6
+on:
+  pull_request:
+  push:
+    branches: [formal/multi-method-wave6-20260925]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  formal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Static proof-harness audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m py_compile conformance/formal_wave6_model.py
+          python3 - <<'PY'
+          import ast, pathlib
+          p = pathlib.Path('conformance/formal_wave6_model.py')
+          tree = ast.parse(p.read_text())
+          assert any(isinstance(n, ast.Assert) for n in ast.walk(tree)), 'formal checker has no assertions'
+          banned_calls = {'eval','exec','compile','__import__','open'}
+          banned_imports = {'os','subprocess','socket','urllib','http','requests','shutil','tempfile'}
+          for n in ast.walk(tree):
+              if isinstance(n, ast.Call) and isinstance(n.func, ast.Name): assert n.func.id not in banned_calls, f'banned call: {n.func.id}'
+              if isinstance(n, (ast.Import, ast.ImportFrom)):
+                  names = [a.name.split('.')[0] for a in n.names] if isinstance(n, ast.Import) else [(n.module or '').split('.')[0]]
+                  assert not (set(names) & banned_imports), f'banned side-effect import: {names}'
+          PY
+      - name: Execute proof twice deterministically
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I conformance/formal_wave6_model.py | tee /tmp/formal-1.txt
+          python3 -I conformance/formal_wave6_model.py > /tmp/formal-2.txt
+          cmp /tmp/formal-1.txt /tmp/formal-2.txt
