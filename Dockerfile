@@ -23,7 +23,7 @@ RUN set -eux; \
 FROM ${RUNTIME_IMAGE} AS runtime
 ARG OCI_CREATED
 ARG OCI_REVISION
-ARG OCI_SOURCE=https://github.com/ORESoftware/k8s-cluster
+ARG OCI_SOURCE=https://github.com/gha-indie-worker/gha-clone-server.rs
 
 LABEL org.opencontainers.image.created="${OCI_CREATED}" \
       org.opencontainers.image.description="Bounded Rust GitHub Actions continuity control plane" \
