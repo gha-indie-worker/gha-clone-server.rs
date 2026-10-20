@@ -142,7 +142,7 @@ jobs:
           import json
           with open('/tmp/gha-ready.json', encoding='utf-8') as f:
               data = json.load(f)
-          assert data['ready'] is True, data
+          assert data['ok'] is True and data['executionReady'] is True and data['webhookExecutionReady'] is True, data
           PY
           curl --fail --silent --show-error --max-time 3 \
             http://127.0.0.1:18125/healthz -o /tmp/gha-health.json
