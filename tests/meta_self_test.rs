@@ -166,7 +166,7 @@ async fn running_server_submits_its_own_workflow_to_the_fixed_build_profile() {
     wait_until_ready(&client, &server_url, &mut child).await;
 
     let workflow_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../.github/workflows/gha-clone-server-meta.yml");
+        .join(".github/workflows/gha-clone-server-meta.yml");
     let workflow_yaml = fs::read_to_string(&workflow_path)
         .unwrap_or_else(|error| panic!("read {}: {error}", workflow_path.display()));
     let response = client
