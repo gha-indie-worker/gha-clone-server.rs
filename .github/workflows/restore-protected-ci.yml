@@ -1,0 +1,155 @@
+name: Restore protected merge verification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: protected-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: fmt, clippy, test, release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout exact PR revision without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Assert exact source commit
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -f Cargo.toml && test -f Cargo.lock
+      - name: Install pinned Rust toolchain and lint components
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.97.0'
+          components: rustfmt, clippy
+      - name: Verify formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy all targets with warnings denied
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Run all locked unit and integration tests
+        run: cargo test --locked --all-targets
+      - name: Compile actual release binaries
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --bins
+          test -x target/release/gha-clone-server
+          test -x target/release/gha-executor-router
+
+  secrets:
+    name: full-history secret scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact head and complete history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Assert exact Git history head
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git rev-parse --is-shallow-repository)" = false
+      - name: Install checksum-pinned Gitleaks scanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/gitleaks_8.30.1_linux_x64.tar.gz"
+          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 --retry 4 \
+            'https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz' \
+            --output "$archive"
+          printf '%s  %s\n' \
+            '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb' \
+            "$archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" version
+      - name: Scan all reachable history (no redaction bypass)
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner --log-opts='--all' .
+
+  images:
+    name: hardened images and live smoke
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact PR revision without persisted credentials
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Assert immutable source and release Dockerfile
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test -f Dockerfile && test -f Cargo.lock
+          grep -Fq 'USER 65532:65532' Dockerfile
+          grep -Fq 'FROM runtime AS clone-server' Dockerfile
+          grep -Fq 'FROM runtime AS executor-router' Dockerfile
+      - name: Build real release images with pinned base images
+        shell: bash
+        env:
+          REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          docker build --pull --target clone-server -t gha-clone-server:ci \
+            --build-arg "OCI_REVISION=$REVISION" .
+          docker build --pull --target executor-router -t gha-executor-router:ci \
+            --build-arg "OCI_REVISION=$REVISION" .
+      - name: Prove hardened runtime metadata and live HTTP
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(docker image inspect --format '{{.Config.User}}' gha-clone-server:ci)" = '65532:65532'
+          test "$(docker image inspect --format '{{.Config.User}}' gha-executor-router:ci)" = '65532:65532'
+          container="$(docker run --detach --rm --cap-drop=ALL \
+            --security-opt=no-new-privileges --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            -p 127.0.0.1:18125:8125 \
+            -e HOST=0.0.0.0 gha-clone-server:ci)"
+          trap 'docker rm --force "$container" >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 40); do
+            if curl --silent --show-error --fail --max-time 2 \
+              http://127.0.0.1:18125/readyz -o /tmp/gha-ready.json 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          python3 - <<'PY'
+          import json
+          with open('/tmp/gha-ready.json', encoding='utf-8') as f:
+              data = json.load(f)
+          assert data['ready'] is True, data
+          PY
+          curl --fail --silent --show-error --max-time 3 \
+            http://127.0.0.1:18125/healthz -o /tmp/gha-health.json
+          python3 - <<'PY'
+          import json
+          with open('/tmp/gha-health.json', encoding='utf-8') as f:
+              data = json.load(f)
+          assert data['ok'] is True and data['service'] == 'gha-clone-server', data
+          assert data['executionEnabled'] is False and data['webhookExecutionEnabled'] is False, data
+          PY
