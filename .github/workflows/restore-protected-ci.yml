@@ -153,3 +153,57 @@ jobs:
           assert data['ok'] is True and data['service'] == 'gha-clone-server', data
           assert data['executionEnabled'] is False and data['webhookExecutionEnabled'] is False, data
           PY
+      - name: Probe executor-router with synthetic disabled provider and no real credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          # A non-secret fixture lets the router exercise config parsing and auth
+          # without reading a GitHub secret or any production credential.
+          fixture="$RUNNER_TEMP/gha-router-synthetic-fixture"
+          mkdir -p "$fixture"
+          printf '%s' 'synthetic-only-not-a-real-credential-000000000000' > "$fixture/auth"
+          chmod 0755 "$fixture"
+          chmod 0644 "$fixture/auth"
+          router_container="$(docker run --detach --rm --cap-drop=ALL \
+            --security-opt=no-new-privileges --read-only \
+            --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+            --mount "type=bind,src=$fixture,dst=/app/ci-fixture,readonly" \
+            -p 127.0.0.1:18126:8126 \
+            -e HOST=0.0.0.0 \
+            -e GHA_EXECUTOR_ROUTER_EXECUTION_ENABLED=false \
+            -e GHA_EXECUTOR_ROUTER_SECRET_ROOT=/app/ci-fixture \
+            -e GHA_EXECUTOR_ROUTER_AUTH_PATH=/app/ci-fixture/auth \
+            -e 'GHA_EXECUTOR_ROUTER_EXECUTORS_JSON=[{"id":"unused","provider":"aws","enabled":false}]' \
+            gha-executor-router:ci)"
+          trap 'docker rm --force "$router_container" >/dev/null 2>&1 || true' EXIT
+          rm -f /tmp/gha-router-ready.json
+          for attempt in $(seq 1 40); do
+            if curl --silent --show-error --fail --max-time 2 \
+              http://127.0.0.1:18126/readyz -o /tmp/gha-router-ready.json 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          python3 - <<'PY'
+          import json
+          with open('/tmp/gha-router-ready.json', encoding='utf-8') as f:
+              data = json.load(f)
+          assert data['ok'] is True and data['service'] == 'gha-executor-router', data
+          assert data['executionEnabled'] is False and data['executionReady'] is True, data
+          assert data['readyExecutors'] == [], data
+          PY
+          curl --fail --silent --show-error --max-time 3 \
+            http://127.0.0.1:18126/healthz -o /tmp/gha-router-health.json
+          python3 - <<'PY'
+          import json
+          with open('/tmp/gha-router-health.json', encoding='utf-8') as f:
+              data = json.load(f)
+          assert data['ok'] is True and data['service'] == 'gha-executor-router', data
+          assert data['executionEnabled'] is False and data['enabledExecutors'] == 0, data
+          PY
+          status="$(curl --silent --show-error --max-time 3 \
+            -o /tmp/gha-router-denial.json -w '%{http_code}' \
+            -H 'Content-Type: application/json' \
+            --data '{"schemaVersion":"build-server.v1"}' \
+            http://127.0.0.1:18126/builds)"
+          test "$status" = 401
