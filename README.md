@@ -83,7 +83,7 @@ server's authenticated `POST /v1/runs` endpoint, polls `GET /v1/runs/<uuid>` to 
 terminal state, and verifies the outgoing request contains only:
 
 - `ORESoftware/k8s-cluster`;
-- an exact 40-hex commit SHA;
+- an exact 40-character lowercase hexadecimal commit SHA;
 - `jobKind=run-profile`;
 - the fixed `rust-verify` profile;
 - the deterministic plan/job request ID.
@@ -114,7 +114,7 @@ submitting work:
 1. the raw request body has a valid SHA-256 HMAC;
 2. `X-GitHub-Delivery` is a valid UUID;
 3. the repository is exactly allowlisted;
-4. `workflow_run.head_sha` is a full 40-hex commit SHA;
+4. `workflow_run.head_sha` is a full 40-character lowercase hexadecimal commit SHA;
 5. `action` is `completed`;
 6. `conclusion` is in `GHA_CLONE_WEBHOOK_FAILURE_CONCLUSIONS`;
 7. `workflow_run.name` is not in `GHA_CLONE_WEBHOOK_IGNORED_WORKFLOWS`;
@@ -139,7 +139,7 @@ claim before webhook execution may be enabled.
 
 The independent lane rejects:
 
-- branch/tag execution instead of a 40-hex commit SHA;
+- branch/tag execution instead of a 40-character lowercase hexadecimal commit SHA;
 - secret/OIDC expressions in `env`, `with`, or commands;
 - dynamic matrices and conditional jobs/steps;
 - arbitrary marketplace actions;
