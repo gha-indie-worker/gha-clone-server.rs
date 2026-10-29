@@ -111,6 +111,27 @@ async fn wait_until_ready(client: &reqwest::Client, base_url: &str, child: &mut 
     }
 }
 
+#[test]
+fn manual_meta_workflow_uses_read_only_token_and_bounded_runner() {
+    let workflow = include_str!("../.github/workflows/gha-clone-server-meta.yml");
+    assert!(
+        workflow.contains("\npermissions:\n  contents: read\n"),
+        "manual meta workflow must restrict the GitHub token"
+    );
+    assert!(
+        workflow.contains("\n    timeout-minutes: 15\n"),
+        "manual meta workflow must bound runner admission time"
+    );
+    assert!(
+        workflow.contains("persist-credentials: false"),
+        "checkout must not persist repository credentials"
+    );
+    assert!(
+        !workflow.contains("contents: write") && !workflow.contains("id-token: write"),
+        "source-free self-test must not request write or OIDC credentials"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn running_server_submits_its_own_workflow_to_the_fixed_build_profile() {
     let mock_state = MockBuildState::default();
