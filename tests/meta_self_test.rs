@@ -111,6 +111,27 @@ async fn wait_until_ready(client: &reqwest::Client, base_url: &str, child: &mut 
     }
 }
 
+#[test]
+fn manual_meta_workflow_uses_read_only_token_and_bounded_runner() {
+    let workflow = include_str!("../.github/workflows/gha-clone-server-meta.yml");
+    assert!(
+        workflow.contains("\npermissions:\n  contents: read\n"),
+        "manual meta workflow must restrict the GitHub token"
+    );
+    assert!(
+        workflow.contains("\n    timeout-minutes: 15\n"),
+        "manual meta workflow must bound runner admission time"
+    );
+    assert!(
+        workflow.contains("persist-credentials: false"),
+        "checkout must not persist repository credentials"
+    );
+    assert!(
+        !workflow.contains("contents: write") && !workflow.contains("id-token: write"),
+        "source-free self-test must not request write or OIDC credentials"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn running_server_submits_its_own_workflow_to_the_fixed_build_profile() {
     let mock_state = MockBuildState::default();
@@ -166,16 +187,44 @@ async fn running_server_submits_its_own_workflow_to_the_fixed_build_profile() {
     wait_until_ready(&client, &server_url, &mut child).await;
 
     let workflow_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../.github/workflows/gha-clone-server-meta.yml");
-    let workflow_yaml = fs::read_to_string(&workflow_path)
+        .join(".github/workflows/gha-clone-server-meta.yml");
+    let hardened_workflow_yaml = fs::read_to_string(&workflow_path)
         .unwrap_or_else(|error| panic!("read {}: {error}", workflow_path.display()));
-    let response = client
+
+    // GitHub Actions can enforce read-only permissions and a job deadline.
+    // Our bounded independent executor intentionally refuses those settings:
+    // it must not silently execute a weaker approximation of the real workflow.
+    let denied_response = client
         .post(format!("{server_url}/v1/runs"))
         .header("x-gha-clone-auth", SERVER_AUTH)
         .json(&json!({
             "repository": "ORESoftware/k8s-cluster",
             "revision": REVISION,
             "workflowPath": ".github/workflows/gha-clone-server-meta.yml",
+            "workflowYaml": hardened_workflow_yaml
+        }))
+        .send()
+        .await
+        .expect("submit hardened source workflow");
+    assert_eq!(denied_response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let denied: Value = denied_response.json().await.expect("denial JSON");
+    assert_eq!(denied["error"], "workflow is not independently executable");
+    assert_eq!(denied["plan"]["independentExecutable"], false);
+
+    // Synthetic test-only subset of the workflow's supported Rust steps.
+    // No caller uses this as an attestation of executing the real workflow,
+    // whose unsupported security controls were explicitly rejected above.
+    let workflow_yaml = hardened_workflow_yaml
+        .replace("\npermissions:\n  contents: read\n", "\n")
+        .replace("\n    timeout-minutes: 15\n", "\n");
+    assert_ne!(workflow_yaml, hardened_workflow_yaml);
+    let response = client
+        .post(format!("{server_url}/v1/runs"))
+        .header("x-gha-clone-auth", SERVER_AUTH)
+        .json(&json!({
+            "repository": "ORESoftware/k8s-cluster",
+            "revision": REVISION,
+            "workflowPath": ".github/workflows/synthetic-rust-verify-fixture.yml",
             "workflowYaml": workflow_yaml
         }))
         .send()
@@ -213,7 +262,7 @@ async fn running_server_submits_its_own_workflow_to_the_fixed_build_profile() {
     assert_eq!(final_run["revision"], REVISION);
     assert_eq!(
         final_run["workflowPath"],
-        ".github/workflows/gha-clone-server-meta.yml"
+        ".github/workflows/synthetic-rust-verify-fixture.yml"
     );
     assert_eq!(final_run["submissions"][0]["profile"], "rust-verify");
     assert_eq!(final_run["submissions"][0]["status"], "succeeded");
