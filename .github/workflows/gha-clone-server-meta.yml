@@ -3,9 +3,14 @@ name: GHA continuity server
 on:
   workflow_dispatch:
 
+# Manual self-test never needs to write repository contents or pull secrets.
+permissions:
+  contents: read
+
 jobs:
   gha-clone-self-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout exact repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
