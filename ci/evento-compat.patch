@@ -1,0 +1,220 @@
+diff --git a/evgl-api/Cargo.toml b/evgl-api/Cargo.toml
+index e09d17a..4f1a1be 100644
+--- a/evgl-api/Cargo.toml
++++ b/evgl-api/Cargo.toml
+@@ -18,7 +18,7 @@ http = "1"
+ jsonwebtoken = "9"
+ serde = { version = "1", features = ["derive"] }
+ serde_json = "1"
+-reqwest = { version = "0.12", default-features = false, features = ["form", "json", "rustls-tls"] }
++reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+ sha2 = "0.10"
+ thiserror = "2"
+ tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync"] }
+diff --git a/evgl-api/src/auth.rs b/evgl-api/src/auth.rs
+index 4cc290b..9e06c1a 100644
+--- a/evgl-api/src/auth.rs
++++ b/evgl-api/src/auth.rs
+@@ -67,14 +67,13 @@ impl AuthConfig {
+     }
+ 
+     fn authenticate(&self, token: &str) -> Result<AuthenticatedUser, ApiError> {
+-        if self.allow_dev_tokens {
+-            if let Some(subject) = token.strip_prefix("dev:") {
+-                if valid_subject(subject) {
+-                    return Ok(AuthenticatedUser {
+-                        subject: subject.to_owned(),
+-                    });
+-                }
+-            }
++        if self.allow_dev_tokens
++            && let Some(subject) = token.strip_prefix("dev:")
++            && valid_subject(subject)
++        {
++            return Ok(AuthenticatedUser {
++                subject: subject.to_owned(),
++            });
+         }
+ 
+         let secret = self.jwt_secret.as_ref().ok_or_else(|| {
+diff --git a/evgl-api/src/integrations.rs b/evgl-api/src/integrations.rs
+index 8863209..dbefe43 100644
+--- a/evgl-api/src/integrations.rs
++++ b/evgl-api/src/integrations.rs
+@@ -80,7 +80,7 @@ pub(crate) struct OAuthCallbackQuery {
+ }
+ 
+ #[derive(Debug, Serialize)]
+-struct OAuthCallbackResponse {
++pub(crate) struct OAuthCallbackResponse {
+     connection: ProviderConnection,
+     return_to: Option<String>,
+ }
+@@ -99,10 +99,10 @@ struct OAuthTokenResponse {
+ impl CredentialVault {
+     pub(crate) fn from_env() -> anyhow::Result<Self> {
+         let environment = env::var("EVGL_ENV").unwrap_or_else(|_| "development".into());
+-        if let Ok(value) = env::var("EVGL_TOKEN_ENCRYPTION_KEY") {
+-            if !value.trim().is_empty() {
+-                return Ok(Self::from_material(value.as_bytes()));
+-            }
++        if let Ok(value) = env::var("EVGL_TOKEN_ENCRYPTION_KEY")
++            && !value.trim().is_empty()
++        {
++            return Ok(Self::from_material(value.as_bytes()));
+         }
+         if environment.eq_ignore_ascii_case("production") {
+             anyhow::bail!("EVGL_TOKEN_ENCRYPTION_KEY is required when EVGL_ENV=production");
+@@ -411,6 +411,7 @@ pub(crate) async fn get_cross_post_job(
+     Ok(Json(job.clone()))
+ }
+ 
++#[allow(clippy::too_many_arguments)]
+ async fn store_connection(
+     state: &AppState,
+     user_subject: &str,
+@@ -504,20 +505,19 @@ async fn execute_provider(
+     if provider != IntegrationProvider::Craigslist && connection.is_none() {
+         return failed(provider, "provider is not connected", preview, attempted_at);
+     }
+-    if let Some(connection) = &connection {
+-        if connection.public.status != ConnectionStatus::Connected
++    if let Some(connection) = &connection
++        && (connection.public.status != ConnectionStatus::Connected
+             || connection
+                 .public
+                 .expires_at
+-                .is_some_and(|expiry| expiry <= Utc::now())
+-        {
+-            return failed(
+-                provider,
+-                "provider connection is expired or unavailable",
+-                preview,
+-                attempted_at,
+-            );
+-        }
++                .is_some_and(|expiry| expiry <= Utc::now()))
++    {
++        return failed(
++            provider,
++            "provider connection is expired or unavailable",
++            preview,
++            attempted_at,
++        );
+     }
+     let secrets = match connection.as_ref() {
+         Some(connection) => match state.vault.open(&connection.encrypted_secrets) {
+@@ -789,10 +789,10 @@ async fn execute_meetup(
+             .map_err(network_error)?,
+     )
+     .await?;
+-    if let Some(errors) = value.get("errors") {
+-        if !errors.as_array().is_none_or(Vec::is_empty) {
+-            return Err(format!("Meetup GraphQL returned errors: {errors}"));
+-        }
++    if let Some(errors) = value.get("errors")
++        && !errors.as_array().is_none_or(Vec::is_empty)
++    {
++        return Err(format!("Meetup GraphQL returned errors: {errors}"));
+     }
+     Ok(success(
+         IntegrationProvider::Meetup,
+@@ -1110,12 +1110,12 @@ fn ipv6_is_private(ip: Ipv6Addr) -> bool {
+ }
+ 
+ fn validate_return_to(return_to: Option<&str>) -> Result<(), ApiError> {
+-    if let Some(value) = return_to {
+-        if !value.starts_with('/') || value.starts_with("//") || value.len() > 500 {
+-            return Err(ApiError::BadRequest(
+-                "return_to must be a relative application path".into(),
+-            ));
+-        }
++    if let Some(value) = return_to
++        && (!value.starts_with('/') || value.starts_with("//") || value.len() > 500)
++    {
++        return Err(ApiError::BadRequest(
++            "return_to must be a relative application path".into(),
++        ));
+     }
+     Ok(())
+ }
+@@ -1261,15 +1261,15 @@ fn meetup_variables(
+     connection: &StoredConnection,
+ ) -> Value {
+     let mut input = meetup_input(event, request);
+-    if let Value::Object(map) = &mut input {
+-        if let Some(group_urlname) = provider_setting(
++    if let Value::Object(map) = &mut input
++        && let Some(group_urlname) = provider_setting(
+             request,
+             connection,
+             IntegrationProvider::Meetup,
+             "group_urlname",
+-        ) {
+-            map.insert("groupUrlname".into(), Value::String(group_urlname));
+-        }
++        )
++    {
++        map.insert("groupUrlname".into(), Value::String(group_urlname));
+     }
+     json!({"input": input})
+ }
+@@ -1362,7 +1362,7 @@ fn promotion_message(event: &Event) -> String {
+     )
+ }
+ 
+-fn access_token<'a>(secrets: Option<&'a ConnectionSecrets>) -> Result<&'a str, String> {
++fn access_token(secrets: Option<&ConnectionSecrets>) -> Result<&str, String> {
+     secrets
+         .and_then(|secrets| secrets.access_token.as_deref())
+         .filter(|token| !token.is_empty())
+diff --git a/evgl-api/src/lib.rs b/evgl-api/src/lib.rs
+index 56c05d0..901ed39 100644
+--- a/evgl-api/src/lib.rs
++++ b/evgl-api/src/lib.rs
+@@ -30,7 +30,7 @@ use evgl_interfaces::{
+     OrganizerSummary, Page, ProviderPublication, RealtimeKind, Rsvp, RsvpStatus, UpdateEvent,
+     UpsertRsvp, slugify,
+ };
+-use futures_util::{SinkExt, StreamExt};
++use futures_util::StreamExt;
+ use integrations::{CredentialVault, OAuthStateRecord, StoredConnection};
+ use reqwest::Client;
+ use serde::Serialize;
+@@ -249,7 +249,7 @@ async fn list_events(
+         .filter(|event| matches_query(event, &query))
+         .cloned()
+         .collect();
+-    items.sort_by(|left, right| left.starts_at.cmp(&right.starts_at));
++    items.sort_by_key(|item| item.starts_at);
+     let total_estimate = items.len() as u64;
+     let limit = query.limit.unwrap_or(50).clamp(1, 200) as usize;
+     items.truncate(limit);
+@@ -549,9 +549,10 @@ async fn websocket_loop(mut socket: WebSocket, mut receiver: broadcast::Receiver
+             },
+             outbound = receiver.recv() => match outbound {
+                 Ok(envelope) => {
+-                    match serde_json::to_string(&envelope) {
+-                        Ok(text) if socket.send(Message::Text(text.into())).await.is_err() => break,
+-                        _ => {}
++                    if let Ok(text) = serde_json::to_string(&envelope)
++                        && socket.send(Message::Text(text.into())).await.is_err()
++                    {
++                        break;
+                     }
+                 }
+                 Err(broadcast::error::RecvError::Lagged(_)) => continue,
+@@ -592,9 +593,10 @@ async fn private_websocket_loop(
+             },
+             outbound = receiver.recv() => match outbound {
+                 Ok(scoped) if scoped.owner == owner => {
+-                    match serde_json::to_string(&scoped.envelope) {
+-                        Ok(text) if socket.send(Message::Text(text.into())).await.is_err() => break,
+-                        _ => {}
++                    if let Ok(text) = serde_json::to_string(&scoped.envelope)
++                        && socket.send(Message::Text(text.into())).await.is_err()
++                    {
++                        break;
+                     }
+                 }
+                 Ok(_) => continue,
