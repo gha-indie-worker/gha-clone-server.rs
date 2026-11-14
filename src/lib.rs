@@ -504,6 +504,7 @@ fn reviewed_profile_commands(run: &str) -> bool {
         "cargo clippy",
         "cargo clippy --all-targets -- -D warnings",
         "cargo test",
+        "cargo test --all-targets",
         "cargo test --locked --all-targets",
         "npm ci",
         "npm ci --ignore-scripts",
