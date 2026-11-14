@@ -169,11 +169,11 @@ fn command_name_spoofing_and_extra_shell_effects_are_never_equivalent() {
         "cargo test --features unreviewed-feature",
     ] {
         let yaml = format!(
-            "jobs:\\n  verify:\\n    runs-on: ubuntu-latest\\n    steps:\\n      - run: {:?}\\n",
+            "jobs:\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - run: {:?}\n",
             command
         );
         let plan = plan(&yaml);
-        let reasons = plan.jobs[0].independent_reasons.join("\\n");
+        let reasons = plan.jobs[0].independent_reasons.join("\n");
         assert!(
             reasons.contains("unreviewed run commands"),
             "command {command:?} unexpectedly accepted: {reasons}"
