@@ -20,6 +20,13 @@ The independent lane never forwards caller-selected shell, action code, runner
 images, or Kubernetes manifests. It submits only a trusted repository, immutable
 commit SHA, and operator-reviewed profile name to `dd-build-server`.
 
+Only literal, reviewed verification commands (or `&&`-joined combinations
+of those commands) qualify for an independent profile. A substring like
+`cargo test` inside an arbitrary shell program does not prove parity.
+Unknown YAML keys, non-secret environment overrides, and unsupported commands
+result in an explicit non-executable plan. For full workflow semantics,
+including arbitrary shell scripts, use the native GitHub Actions runner lane.
+
 ## API
 
 All `/v1/*` endpoints require `x-gha-clone-auth` or `x-server-auth`, compared in
