@@ -410,10 +410,10 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
         if has_run == has_uses {
             errors.push(format!("{path}: exactly one of run or uses is required"));
         }
-        if mapping_get(step, "run").is_some_and(|value| !value.is_string()) {
+        if mapping_get(step, "run").is_some_and(|value| value.as_str().is_none()) {
             errors.push(format!("{path}: run must be a string"));
         }
-        if mapping_get(step, "uses").is_some_and(|value| !value.is_string()) {
+        if mapping_get(step, "uses").is_some_and(|value| value.as_str().is_none()) {
             errors.push(format!("{path}: uses must be a string"));
         }
         if mapping_get(step, "if").is_some() {
