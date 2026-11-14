@@ -98,10 +98,7 @@ fn same_profile_multi_step_verification_remains_supported() {
             "dtolnay/rust-toolchain@abcdef",
             "cargo fmt --check && cargo test",
         ),
-        (
-            "actions/setup-node@abcdef",
-            "npm ci && npm test",
-        ),
+        ("actions/setup-node@abcdef", "npm ci && npm test"),
         (
             "actions/setup-python@abcdef",
             "python -m compileall . && python -m pytest",
