@@ -487,9 +487,10 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
     }
     // A setup action alone does not execute a verification command. Likewise,
     // commands belonging to different fixed profiles cannot be silently collapsed.
-    if !reviewed_run_commands.iter().any(|command| {
-        !matches!(command.as_str(), "npm ci" | "npm ci --ignore-scripts")
-    }) {
+    if !reviewed_run_commands
+        .iter()
+        .any(|command| !matches!(command.as_str(), "npm ci" | "npm ci --ignore-scripts"))
+    {
         reasons.push("independent lane requires a reviewed verification run command".into());
     }
     if let Some(expected) = profile.as_deref() {
