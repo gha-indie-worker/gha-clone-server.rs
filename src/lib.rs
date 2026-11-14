@@ -298,7 +298,7 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
     }
 
     let mut reasons = Vec::new();
-    let mut notes = Vec::new();
+    let notes = Vec::new();
     let mut combined = String::new();
 
     // The independent runner compiles to a fixed profile, not the workflow's
@@ -401,9 +401,12 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
                 "{path}: env cannot be reproduced by the fixed-profile executor"
             ));
         }
-        if mapping_get(step, "with").is_some() && mapping_get(step, "uses").is_none() {
+        if mapping_get(step, "with").is_some() {
+            // Action inputs can select a different repository/ref, toolchain,
+            // credentials, or runtime behavior. A fixed profile does not
+            // execute the action and must not claim those inputs were honored.
             reasons.push(format!(
-                "{path}: with is only meaningful for an action step"
+                "{path}: with inputs are not reproduced by the fixed-profile executor"
             ));
         }
         let has_run = mapping_get(step, "run").is_some();
@@ -459,10 +462,6 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
             if !allowed_setup_action(action) {
                 reasons.push(format!(
                     "{path}: marketplace action {action:?} has no independent-lane equivalence"
-                ));
-            } else if mapping_get(step, "with").is_some() {
-                notes.push(format!(
-                    "{path}: setup action inputs are advisory; the fixed profile pins the actual toolchain"
                 ));
             }
         }
