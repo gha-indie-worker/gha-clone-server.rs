@@ -193,5 +193,9 @@ jobs:
       - run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 "#,
     );
-    assert!(plan.independent_executable, "{:?}", plan.jobs[0].independent_reasons);
+    assert!(
+        plan.independent_executable,
+        "{:?}",
+        plan.jobs[0].independent_reasons
+    );
 }
