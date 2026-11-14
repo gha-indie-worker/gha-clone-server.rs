@@ -169,7 +169,8 @@ async fn running_server_submits_its_own_workflow_to_the_fixed_build_profile() {
     // This crate is also published standalone. Prefer its own checked-in
     // fixture, while retaining compatibility with the source monorepo layout.
     let local_fixture = manifest_dir.join(".github/workflows/gha-clone-server-meta.yml");
-    let monorepo_fixture = manifest_dir.join("../../../.github/workflows/gha-clone-server-meta.yml");
+    let monorepo_fixture =
+        manifest_dir.join("../../../.github/workflows/gha-clone-server-meta.yml");
     let workflow_path = if local_fixture.is_file() {
         local_fixture
     } else {
