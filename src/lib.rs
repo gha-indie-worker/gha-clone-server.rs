@@ -1061,7 +1061,7 @@ jobs:
     }
 
     #[test]
-    fn setup_action_inputs_are_reported_as_fixed_profile_advisory_notes() {
+    fn setup_action_inputs_are_not_silently_ignored_by_fixed_profiles() {
         let plan = build_plan(
             &request(
                 r#"
@@ -1078,11 +1078,12 @@ jobs:
             &PlannerLimits::default(),
         )
         .expect("valid plan");
-        assert!(plan.jobs[0].independent_supported);
+        assert!(!plan.jobs[0].independent_supported);
+        assert!(!plan.independent_executable);
         assert!(plan.jobs[0]
-            .independent_notes
+            .independent_reasons
             .iter()
-            .any(|note| note.contains("fixed profile pins")));
+            .any(|reason| reason.contains("with inputs are not reproduced")));
     }
 
     #[test]
