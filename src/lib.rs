@@ -447,6 +447,11 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
                     "{path}: expressions inside run commands are unsupported"
                 ));
             }
+            if !reviewed_profile_commands(run) {
+                reasons.push(format!(
+                    "{path}: unreviewed run commands cannot be mapped to a fixed profile"
+                ));
+            }
         }
         if let Some(action) = mapping_get(step, "uses").and_then(Value::as_str) {
             combined.push_str(action);
@@ -487,6 +492,42 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
         independent_reasons: reasons,
         independent_notes: notes,
     })
+}
+
+// Only reviewed, literal verification commands may be represented by the
+// independent fixed-profile executor. Recognizing a tool name somewhere in a
+// shell script is NOT enough to claim equivalent execution. Rich YAML/command
+// semantics remain available through the native GitHub runner lane.
+fn reviewed_profile_commands(run: &str) -> bool {
+    const REVIEWED: &[&str] = &[
+        "cargo fmt --check",
+        "cargo clippy",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo test --locked --all-targets",
+        "npm ci",
+        "npm ci --ignore-scripts",
+        "npm test",
+        "pnpm test",
+        "yarn test",
+        "node --test",
+        "python -m compileall .",
+        "python -m pytest",
+        "pytest",
+        "flutter analyze",
+        "flutter test",
+        "flutter build apk --debug",
+        "flutter build appbundle",
+        "flutter build web --release",
+        "flutter build linux --release",
+        "flutter build linux --release -t lib/main_desktop.dart",
+        "npx playwright test",
+        "node puppeteer-smoke.js",
+    ];
+    !run.trim().is_empty()
+        && run
+            .split("&&")
+            .all(|command| REVIEWED.contains(&command.trim()))
 }
 
 fn classify_profile(text: &str) -> Option<String> {
