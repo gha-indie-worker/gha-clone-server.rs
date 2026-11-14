@@ -204,9 +204,8 @@ pub fn build_plan(
             Some(key) => workflow_reasons.push(format!(
                 "workflow-level {key} is unsupported by the independent lane"
             )),
-            None => workflow_reasons.push(
-                "workflow-level non-string mapping keys are unsupported".to_string(),
-            ),
+            None => workflow_reasons
+                .push("workflow-level non-string mapping keys are unsupported".to_string()),
         }
     }
 
@@ -307,10 +306,9 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
     for key in job.keys() {
         match key.as_str() {
             Some(
-                "name" | "runs-on" | "needs" | "steps" | "uses" | "permissions"
-                | "environment" | "secrets" | "defaults" | "outputs"
-                | "continue-on-error" | "timeout-minutes" | "services"
-                | "container" | "strategy" | "if" | "env"
+                "name" | "runs-on" | "needs" | "steps" | "uses" | "permissions" | "environment"
+                | "secrets" | "defaults" | "outputs" | "continue-on-error" | "timeout-minutes"
+                | "services" | "container" | "strategy" | "if" | "env",
             ) => {}
             Some(key) => reasons.push(format!(
                 "job-level {key} is unsupported by the independent lane"
@@ -390,8 +388,7 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
             match key.as_str() {
                 Some(
                     "name" | "id" | "run" | "uses" | "if" | "working-directory"
-                    | "continue-on-error" | "timeout-minutes" | "shell"
-                    | "env" | "with"
+                    | "continue-on-error" | "timeout-minutes" | "shell" | "env" | "with",
                 ) => {}
                 Some(key) => reasons.push(format!(
                     "{path}: field {key} is unsupported by the fixed-profile executor"
@@ -400,10 +397,14 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
             }
         }
         if mapping_get(step, "env").is_some() {
-            reasons.push(format!("{path}: env cannot be reproduced by the fixed-profile executor"));
+            reasons.push(format!(
+                "{path}: env cannot be reproduced by the fixed-profile executor"
+            ));
         }
         if mapping_get(step, "with").is_some() && mapping_get(step, "uses").is_none() {
-            reasons.push(format!("{path}: with is only meaningful for an action step"));
+            reasons.push(format!(
+                "{path}: with is only meaningful for an action step"
+            ));
         }
         let has_run = mapping_get(step, "run").is_some();
         let has_uses = mapping_get(step, "uses").is_some();
