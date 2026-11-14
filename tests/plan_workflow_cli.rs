@@ -37,8 +37,7 @@ fn fixed_profile_workflow_produces_json_without_network() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let value: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("plan JSON");
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout).expect("plan JSON");
     assert_eq!(value["repository"], "owner/repo");
     assert_eq!(value["immutableRevision"], true);
     assert_eq!(value["independentExecutable"], true);
@@ -47,7 +46,8 @@ fn fixed_profile_workflow_produces_json_without_network() {
 
 #[test]
 fn unsupported_commands_are_explained_and_fail_closed_only_when_required() {
-    let yaml = "jobs:\n  sample:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hello\n";
+    let yaml =
+        "jobs:\n  sample:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hello\n";
     let observe = invoke(yaml, false);
     assert!(observe.status.success());
     let require = invoke(yaml, true);
@@ -59,7 +59,10 @@ fn unsupported_commands_are_explained_and_fail_closed_only_when_required() {
         .as_array()
         .expect("reason list")
         .iter()
-        .any(|reason| reason.as_str().unwrap_or("").contains("no fixed build-server profile")));
+        .any(|reason| reason
+            .as_str()
+            .unwrap_or("")
+            .contains("no fixed build-server profile")));
 }
 
 #[test]
