@@ -50,7 +50,9 @@ fn run() -> Result<i32, String> {
     println!("{output}");
 
     if require_independent && !plan.independent_executable {
-        eprintln!("independent-lane admission denied: inspect independentReasons and warnings in JSON");
+        eprintln!(
+            "independent-lane admission denied: inspect independentReasons and warnings in JSON"
+        );
         Ok(3)
     } else {
         Ok(0)
