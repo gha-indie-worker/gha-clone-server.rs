@@ -20,6 +20,29 @@ The independent lane never forwards caller-selected shell, action code, runner
 images, or Kubernetes manifests. It submits only a trusted repository, immutable
 commit SHA, and operator-reviewed profile name to `dd-build-server`.
 
+## Offline workflow YAML planning
+
+Operators can inspect a local workflow without starting the HTTP service or
+executing any action. This is an **offline classification tool**, not a GitHub
+Actions interpreter or a claim that all YAML constructs are supported.
+
+```sh
+cargo run --bin plan_workflow -- \
+  owner/repo 0123456789abcdef0123456789abcdef01234567 \
+  .github/workflows/ci.yml .github/workflows/ci.yml
+
+# Fail closed when the fixed-profile independent lane cannot run every job:
+cargo run --bin plan_workflow -- --require-independent \
+  owner/repo 0123456789abcdef0123456789abcdef01234567 \
+  .github/workflows/ci.yml .github/workflows/ci.yml
+```
+
+The JSON response contains the normal planner job-by-job explanations,
+`independentExecutable`, `independentReasons` and `warnings`. Exit codes are
+0 for a valid plan (without a strict unsupported-lane rejection), 2 for input
+or YAML errors, and 3 when `--require-independent` rejects the plan. File
+reads are bounded by the planner's configured workflow size limit.
+
 ## API
 
 All `/v1/*` endpoints require `x-gha-clone-auth` or `x-server-auth`, compared in
