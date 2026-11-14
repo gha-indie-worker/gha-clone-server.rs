@@ -198,11 +198,15 @@ pub fn build_plan(
     }
 
     let mut workflow_reasons = Vec::new();
-    for key in root.keys().filter_map(Value::as_str) {
-        if !matches!(key, "name" | "run-name" | "on" | "jobs") {
-            workflow_reasons.push(format!(
+    for key in root.keys() {
+        match key.as_str() {
+            Some("name" | "run-name" | "on" | "jobs") => {}
+            Some(key) => workflow_reasons.push(format!(
                 "workflow-level {key} is unsupported by the independent lane"
-            ));
+            )),
+            None => workflow_reasons.push(
+                "workflow-level non-string mapping keys are unsupported".to_string(),
+            ),
         }
     }
 
@@ -297,6 +301,30 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
     let mut reasons = Vec::new();
     let mut notes = Vec::new();
     let mut combined = String::new();
+
+    // The independent runner compiles to a fixed profile, not the workflow's
+    // shell. Unrecognized fields must never be silently treated as equivalent.
+    for key in job.keys() {
+        match key.as_str() {
+            Some(
+                "name" | "runs-on" | "needs" | "steps" | "uses" | "permissions"
+                | "environment" | "secrets" | "defaults" | "outputs"
+                | "continue-on-error" | "timeout-minutes" | "services"
+                | "container" | "strategy" | "if" | "env"
+            ) => {}
+            Some(key) => reasons.push(format!(
+                "job-level {key} is unsupported by the independent lane"
+            )),
+            None => reasons.push("job-level non-string mapping keys are unsupported".into()),
+        }
+    }
+    if mapping_get(job, "env").is_some() {
+        reasons.push("job-level env cannot be reproduced by the fixed-profile executor".into());
+    }
+    if runs_on.iter().any(|label| label.contains("${{")) {
+        reasons.push("dynamic runs-on expressions are unsupported".into());
+    }
+
     let has_services = mapping_get(job, "services").is_some();
     let has_container = mapping_get(job, "container").is_some();
     let has_strategy = mapping_get(job, "strategy").is_some();
@@ -358,6 +386,36 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
             errors.push(format!("{path}: step must be a mapping"));
             continue;
         };
+        for key in step.keys() {
+            match key.as_str() {
+                Some(
+                    "name" | "id" | "run" | "uses" | "if" | "working-directory"
+                    | "continue-on-error" | "timeout-minutes" | "shell"
+                    | "env" | "with"
+                ) => {}
+                Some(key) => reasons.push(format!(
+                    "{path}: field {key} is unsupported by the fixed-profile executor"
+                )),
+                None => reasons.push(format!("{path}: non-string mapping keys are unsupported")),
+            }
+        }
+        if mapping_get(step, "env").is_some() {
+            reasons.push(format!("{path}: env cannot be reproduced by the fixed-profile executor"));
+        }
+        if mapping_get(step, "with").is_some() && mapping_get(step, "uses").is_none() {
+            reasons.push(format!("{path}: with is only meaningful for an action step"));
+        }
+        let has_run = mapping_get(step, "run").is_some();
+        let has_uses = mapping_get(step, "uses").is_some();
+        if has_run == has_uses {
+            errors.push(format!("{path}: exactly one of run or uses is required"));
+        }
+        if mapping_get(step, "run").is_some_and(|value| !value.is_string()) {
+            errors.push(format!("{path}: run must be a string"));
+        }
+        if mapping_get(step, "uses").is_some_and(|value| !value.is_string()) {
+            errors.push(format!("{path}: uses must be a string"));
+        }
         if mapping_get(step, "if").is_some() {
             reasons.push(format!("{path}: conditional steps are unsupported"));
         }
