@@ -198,11 +198,14 @@ pub fn build_plan(
     }
 
     let mut workflow_reasons = Vec::new();
-    for key in root.keys().filter_map(Value::as_str) {
-        if !matches!(key, "name" | "run-name" | "on" | "jobs") {
-            workflow_reasons.push(format!(
+    for key in root.keys() {
+        match key.as_str() {
+            Some("name" | "run-name" | "on" | "jobs") => {}
+            Some(key) => workflow_reasons.push(format!(
                 "workflow-level {key} is unsupported by the independent lane"
-            ));
+            )),
+            None => workflow_reasons
+                .push("workflow-level non-string mapping keys are unsupported".to_string()),
         }
     }
 
@@ -295,8 +298,33 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
     }
 
     let mut reasons = Vec::new();
-    let mut notes = Vec::new();
+    let notes = Vec::new();
     let mut combined = String::new();
+    let mut reviewed_run_commands = Vec::new();
+    let mut setup_actions = Vec::new();
+
+    // The independent runner compiles to a fixed profile, not the workflow's
+    // shell. Unrecognized fields must never be silently treated as equivalent.
+    for key in job.keys() {
+        match key.as_str() {
+            Some(
+                "name" | "runs-on" | "needs" | "steps" | "uses" | "permissions" | "environment"
+                | "secrets" | "defaults" | "outputs" | "continue-on-error" | "timeout-minutes"
+                | "services" | "container" | "strategy" | "if" | "env",
+            ) => {}
+            Some(key) => reasons.push(format!(
+                "job-level {key} is unsupported by the independent lane"
+            )),
+            None => reasons.push("job-level non-string mapping keys are unsupported".into()),
+        }
+    }
+    if mapping_get(job, "env").is_some() {
+        reasons.push("job-level env cannot be reproduced by the fixed-profile executor".into());
+    }
+    if runs_on.iter().any(|label| label.contains("${{")) {
+        reasons.push("dynamic runs-on expressions are unsupported".into());
+    }
+
     let has_services = mapping_get(job, "services").is_some();
     let has_container = mapping_get(job, "container").is_some();
     let has_strategy = mapping_get(job, "strategy").is_some();
@@ -358,6 +386,42 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
             errors.push(format!("{path}: step must be a mapping"));
             continue;
         };
+        for key in step.keys() {
+            match key.as_str() {
+                Some(
+                    "name" | "id" | "run" | "uses" | "if" | "working-directory"
+                    | "continue-on-error" | "timeout-minutes" | "shell" | "env" | "with",
+                ) => {}
+                Some(key) => reasons.push(format!(
+                    "{path}: field {key} is unsupported by the fixed-profile executor"
+                )),
+                None => reasons.push(format!("{path}: non-string mapping keys are unsupported")),
+            }
+        }
+        if mapping_get(step, "env").is_some() {
+            reasons.push(format!(
+                "{path}: env cannot be reproduced by the fixed-profile executor"
+            ));
+        }
+        if mapping_get(step, "with").is_some() {
+            // Action inputs can select a different repository/ref, toolchain,
+            // credentials, or runtime behavior. A fixed profile does not
+            // execute the action and must not claim those inputs were honored.
+            reasons.push(format!(
+                "{path}: with inputs are not reproduced by the fixed-profile executor"
+            ));
+        }
+        let has_run = mapping_get(step, "run").is_some();
+        let has_uses = mapping_get(step, "uses").is_some();
+        if has_run == has_uses {
+            errors.push(format!("{path}: exactly one of run or uses is required"));
+        }
+        if mapping_get(step, "run").is_some_and(|value| value.as_str().is_none()) {
+            errors.push(format!("{path}: run must be a string"));
+        }
+        if mapping_get(step, "uses").is_some_and(|value| value.as_str().is_none()) {
+            errors.push(format!("{path}: uses must be a string"));
+        }
         if mapping_get(step, "if").is_some() {
             reasons.push(format!("{path}: conditional steps are unsupported"));
         }
@@ -388,6 +452,16 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
                     "{path}: expressions inside run commands are unsupported"
                 ));
             }
+            if !reviewed_profile_commands(run) {
+                reasons.push(format!(
+                    "{path}: unreviewed run commands cannot be mapped to a fixed profile"
+                ));
+            } else {
+                reviewed_run_commands.extend(
+                    run.split("&&")
+                        .map(|command| command.trim().to_ascii_lowercase()),
+                );
+            }
         }
         if let Some(action) = mapping_get(step, "uses").and_then(Value::as_str) {
             combined.push_str(action);
@@ -396,10 +470,8 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
                 reasons.push(format!(
                     "{path}: marketplace action {action:?} has no independent-lane equivalence"
                 ));
-            } else if mapping_get(step, "with").is_some() {
-                notes.push(format!(
-                    "{path}: setup action inputs are advisory; the fixed profile pins the actual toolchain"
-                ));
+            } else {
+                setup_actions.push(action.to_ascii_lowercase());
             }
         }
     }
@@ -412,6 +484,30 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
     let profile = classify_profile(&lower);
     if profile.is_none() {
         reasons.push("no fixed build-server profile matches this job".into());
+    }
+    // A setup action alone does not execute a verification command. Likewise,
+    // commands belonging to different fixed profiles cannot be silently collapsed.
+    if !reviewed_run_commands
+        .iter()
+        .any(|command| !matches!(command.as_str(), "npm ci" | "npm ci --ignore-scripts"))
+    {
+        reasons.push("independent lane requires a reviewed verification run command".into());
+    }
+    if let Some(expected) = profile.as_deref() {
+        for command in &reviewed_run_commands {
+            if classify_profile(command).as_deref() != Some(expected) {
+                reasons.push(format!(
+                    "reviewed command {command:?} does not match fixed profile {expected}"
+                ));
+            }
+        }
+        for action in &setup_actions {
+            if !setup_action_matches_profile(action, expected) {
+                reasons.push(format!(
+                    "setup action {action:?} does not match fixed profile {expected}"
+                ));
+            }
+        }
     }
     let independent_supported = reasons.is_empty() && profile.is_some();
     let (arc_compatible, arc_lane) =
@@ -428,6 +524,43 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
         independent_reasons: reasons,
         independent_notes: notes,
     })
+}
+
+// Only reviewed, literal verification commands may be represented by the
+// independent fixed-profile executor. Recognizing a tool name somewhere in a
+// shell script is NOT enough to claim equivalent execution. Rich YAML/command
+// semantics remain available through the native GitHub runner lane.
+fn reviewed_profile_commands(run: &str) -> bool {
+    const REVIEWED: &[&str] = &[
+        "cargo fmt --check",
+        "cargo clippy",
+        "cargo clippy --all-targets -- -D warnings",
+        "cargo test",
+        "cargo test --all-targets",
+        "cargo test --locked --all-targets",
+        "npm ci",
+        "npm ci --ignore-scripts",
+        "npm test",
+        "pnpm test",
+        "yarn test",
+        "node --test",
+        "python -m compileall .",
+        "python -m pytest",
+        "pytest",
+        "flutter analyze",
+        "flutter test",
+        "flutter build apk --debug",
+        "flutter build appbundle",
+        "flutter build web --release",
+        "flutter build linux --release",
+        "flutter build linux --release -t lib/main_desktop.dart",
+        "npx playwright test",
+        "node puppeteer-smoke.js",
+    ];
+    !run.trim().is_empty()
+        && run
+            .split("&&")
+            .all(|command| REVIEWED.contains(&command.trim()))
 }
 
 fn classify_profile(text: &str) -> Option<String> {
@@ -606,6 +739,27 @@ fn contains_secret_expression(value: Option<&Value>) -> bool {
             || text.contains("github.token")
             || text.contains("actions_id_token_request")
     })
+}
+
+// The fixed profile pins its own toolchains. Setups for a different toolchain
+// cannot be silently dropped while claiming equivalent execution.
+fn setup_action_matches_profile(action: &str, profile: &str) -> bool {
+    if action.starts_with("actions/checkout@") {
+        return true;
+    }
+    if action.starts_with("dtolnay/rust-toolchain@") {
+        return profile == "rust-verify";
+    }
+    if action.starts_with("actions/setup-node@") || action.starts_with("pnpm/action-setup@") {
+        return profile == "node-verify" || profile == "playwright" || profile == "puppeteer";
+    }
+    if action.starts_with("actions/setup-python@") {
+        return profile == "python-verify";
+    }
+    if action.starts_with("subosito/flutter-action@") {
+        return profile.starts_with("flutter-");
+    }
+    false // No reviewed Java verification profile exists.
 }
 
 fn allowed_setup_action(action: &str) -> bool {
@@ -961,7 +1115,7 @@ jobs:
     }
 
     #[test]
-    fn setup_action_inputs_are_reported_as_fixed_profile_advisory_notes() {
+    fn setup_action_inputs_are_not_silently_ignored_by_fixed_profiles() {
         let plan = build_plan(
             &request(
                 r#"
@@ -978,11 +1132,12 @@ jobs:
             &PlannerLimits::default(),
         )
         .expect("valid plan");
-        assert!(plan.jobs[0].independent_supported);
+        assert!(!plan.jobs[0].independent_supported);
+        assert!(!plan.independent_executable);
         assert!(plan.jobs[0]
-            .independent_notes
+            .independent_reasons
             .iter()
-            .any(|note| note.contains("fixed profile pins")));
+            .any(|reason| reason.contains("with inputs are not reproduced")));
     }
 
     #[test]

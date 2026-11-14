@@ -553,7 +553,7 @@ jobs:
 }
 
 #[test]
-fn allowed_setup_actions_are_case_insensitive_and_inputs_are_advisory() {
+fn allowed_setup_actions_are_case_insensitive_but_inputs_fail_closed() {
     let plan = plan(
         r#"
 jobs:
@@ -569,16 +569,12 @@ jobs:
     );
 
     let job = job(&plan, "node");
-    assert!(
-        job.independent_supported,
-        "unexpected rejection: {:?}",
-        job.independent_reasons
-    );
-    assert_eq!(job.independent_profile.as_deref(), Some("node-verify"));
+    assert!(!job.independent_supported);
+    assert!(!plan.independent_executable);
     assert!(job
-        .independent_notes
+        .independent_reasons
         .iter()
-        .any(|note| note.contains("fixed profile pins the actual toolchain")));
+        .any(|reason| reason.contains("with inputs are not reproduced")));
 }
 
 #[test]

@@ -165,8 +165,17 @@ async fn running_server_submits_its_own_workflow_to_the_fixed_build_profile() {
         .expect("HTTP client");
     wait_until_ready(&client, &server_url, &mut child).await;
 
-    let workflow_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../.github/workflows/gha-clone-server-meta.yml");
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // This crate is also published standalone. Prefer its own checked-in
+    // fixture, while retaining compatibility with the source monorepo layout.
+    let local_fixture = manifest_dir.join(".github/workflows/gha-clone-server-meta.yml");
+    let monorepo_fixture =
+        manifest_dir.join("../../../.github/workflows/gha-clone-server-meta.yml");
+    let workflow_path = if local_fixture.is_file() {
+        local_fixture
+    } else {
+        monorepo_fixture
+    };
     let workflow_yaml = fs::read_to_string(&workflow_path)
         .unwrap_or_else(|error| panic!("read {}: {error}", workflow_path.display()));
     let response = client
