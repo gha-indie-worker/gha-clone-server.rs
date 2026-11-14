@@ -300,6 +300,8 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
     let mut reasons = Vec::new();
     let notes = Vec::new();
     let mut combined = String::new();
+    let mut reviewed_run_commands = Vec::new();
+    let mut setup_actions = Vec::new();
 
     // The independent runner compiles to a fixed profile, not the workflow's
     // shell. Unrecognized fields must never be silently treated as equivalent.
@@ -454,6 +456,11 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
                 reasons.push(format!(
                     "{path}: unreviewed run commands cannot be mapped to a fixed profile"
                 ));
+            } else {
+                reviewed_run_commands.extend(
+                    run.split("&&")
+                        .map(|command| command.trim().to_ascii_lowercase()),
+                );
             }
         }
         if let Some(action) = mapping_get(step, "uses").and_then(Value::as_str) {
@@ -463,6 +470,8 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
                 reasons.push(format!(
                     "{path}: marketplace action {action:?} has no independent-lane equivalence"
                 ));
+            } else {
+                setup_actions.push(action.to_ascii_lowercase());
             }
         }
     }
@@ -475,6 +484,29 @@ fn compile_job(id: &str, job: &Mapping, limits: &PlannerLimits) -> Result<JobPla
     let profile = classify_profile(&lower);
     if profile.is_none() {
         reasons.push("no fixed build-server profile matches this job".into());
+    }
+    // A setup action alone does not execute a verification command. Likewise,
+    // commands belonging to different fixed profiles cannot be silently collapsed.
+    if !reviewed_run_commands.iter().any(|command| {
+        !matches!(command.as_str(), "npm ci" | "npm ci --ignore-scripts")
+    }) {
+        reasons.push("independent lane requires a reviewed verification run command".into());
+    }
+    if let Some(expected) = profile.as_deref() {
+        for command in &reviewed_run_commands {
+            if classify_profile(command).as_deref() != Some(expected) {
+                reasons.push(format!(
+                    "reviewed command {command:?} does not match fixed profile {expected}"
+                ));
+            }
+        }
+        for action in &setup_actions {
+            if !setup_action_matches_profile(action, expected) {
+                reasons.push(format!(
+                    "setup action {action:?} does not match fixed profile {expected}"
+                ));
+            }
+        }
     }
     let independent_supported = reasons.is_empty() && profile.is_some();
     let (arc_compatible, arc_lane) =
@@ -706,6 +738,27 @@ fn contains_secret_expression(value: Option<&Value>) -> bool {
             || text.contains("github.token")
             || text.contains("actions_id_token_request")
     })
+}
+
+// The fixed profile pins its own toolchains. Setups for a different toolchain
+// cannot be silently dropped while claiming equivalent execution.
+fn setup_action_matches_profile(action: &str, profile: &str) -> bool {
+    if action.starts_with("actions/checkout@") {
+        return true;
+    }
+    if action.starts_with("dtolnay/rust-toolchain@") {
+        return profile == "rust-verify";
+    }
+    if action.starts_with("actions/setup-node@") || action.starts_with("pnpm/action-setup@") {
+        return profile == "node-verify" || profile == "playwright" || profile == "puppeteer";
+    }
+    if action.starts_with("actions/setup-python@") {
+        return profile == "python-verify";
+    }
+    if action.starts_with("subosito/flutter-action@") {
+        return profile.starts_with("flutter-");
+    }
+    false // No reviewed Java verification profile exists.
 }
 
 fn allowed_setup_action(action: &str) -> bool {
