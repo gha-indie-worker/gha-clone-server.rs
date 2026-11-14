@@ -199,3 +199,24 @@ jobs:
         plan.jobs[0].independent_reasons
     );
 }
+
+#[test]
+fn action_inputs_cannot_override_checkout_revision_or_toolchain() {
+    for action_step in [
+        "- uses: actions/checkout@abc\\n        with:\\n          repository: another-owner/another-repo\\n          ref: main",
+        "- uses: actions/checkout@abc\\n        with:\\n          persist-credentials: true",
+        "- uses: actions/setup-node@abc\\n        with:\\n          node-version: '20'",
+        "- uses: dtolnay/rust-toolchain@abc\\n        with:\\n          toolchain: nightly",
+    ] {
+        let yaml = format!(
+            "jobs:\\n  verify:\\n    runs-on: ubuntu-latest\\n    steps:\\n      {action_step}\\n      - run: cargo test\\n"
+        ).replace("\\n", "\n");
+        let plan = plan(&yaml);
+        let reasons = plan.jobs[0].independent_reasons.join("\n");
+        assert!(
+            reasons.contains("with inputs are not reproduced"),
+            "Action input silently accepted: {action_step:?} => {reasons:?}"
+        );
+        assert!(!plan.independent_executable, "{action_step:?}");
+    }
+}
