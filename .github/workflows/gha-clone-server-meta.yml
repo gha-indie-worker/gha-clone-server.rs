@@ -1,0 +1,9 @@
+name: GHA Clone Server meta self-test
+on:
+  workflow_dispatch:
+jobs:
+  gha-clone-self-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - run: cargo test --all-targets
