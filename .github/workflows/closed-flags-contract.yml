@@ -1,0 +1,74 @@
+name: Closed flags-2-env contract
+on:
+  pull_request:
+    paths:
+      - .cli-flags.toml
+      - scripts/flags_contract.rs
+      - .github/workflows/closed-flags-contract.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  flags-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - name: Check out exact PR head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - name: Verify source Git identity
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          git diff --quiet --exit-code
+      - name: Install pinned Rust 1.90
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.90.0
+      - name: Execute exact-manifest positive and negative mutation tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          rustc +1.90.0 --edition=2021 --test scripts/flags_contract.rs -o "$RUNNER_TEMP/flags-contract-tests"
+          "$RUNNER_TEMP/flags-contract-tests" 2>&1 | tee evidence/flags-contract-tests.log
+          grep -F "test result: ok. 5 passed; 0 failed;" evidence/flags-contract-tests.log
+          rustc +1.90.0 --edition=2021 scripts/flags_contract.rs -o "$RUNNER_TEMP/flags-contract"
+          "$RUNNER_TEMP/flags-contract" | grep -Fx CLOSED_FLAGS_CONTRACT_PASS
+      - name: Retain bound source and test evidence
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          grep -F "test result: ok. 5 passed; 0 failed;" evidence/flags-contract-tests.log
+          jq -n \
+            --arg head "$EXPECTED_HEAD" \
+            --arg tree "$(git rev-parse 'HEAD^{tree}')" \
+            --arg source "$(git rev-parse 'HEAD:scripts/flags_contract.rs')" \
+            --arg manifest "$(git rev-parse 'HEAD:.cli-flags.toml')" \
+            --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg log_sha "$(sha256sum evidence/flags-contract-tests.log | cut -d' ' -f1)" \
+            '{schema:"clone-flags-contract-receipt/v1",
+              source:{head:$head,tree:$tree,testBlob:$source,manifestBlob:$manifest},
+              run:{id:$run,attempt:($attempt|tonumber)},
+              executedMutations:5,status:"passed",testLogSha256:$log_sha,
+              runtimeFlagsParser:"NOT_EXECUTED",
+              attoGuestExecution:"NOT_EXECUTED"}' > evidence/flags-contract-receipt.json
+          jq -e '.schema == "clone-flags-contract-receipt/v1" and
+                 .executedMutations == 5 and .status == "passed" and
+                 .run.attempt >= 1 and .source.tree != "" and
+                 .runtimeFlagsParser == "NOT_EXECUTED"' evidence/flags-contract-receipt.json
+      - name: Upload exact-head receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flags-contract-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
